@@ -3,13 +3,16 @@ import {
   CheckCircle2,
   ClipboardPaste,
   Copy,
+  Download,
   FilePlus2,
+  FileUp,
   FolderKanban,
   PanelBottom,
   PanelLeft,
   PanelRight,
   Plus,
   Redo2,
+  Save,
   Search,
   Undo2,
   X,
@@ -17,6 +20,7 @@ import {
 import { STARTER_TEMPLATES } from '../../domain/fixtures/starter-templates';
 import { NODE_REGISTRY } from '../../domain/registry/node-registry';
 import type { NodeType } from '../../domain/types/workflow';
+import { downloadWorkflowJson } from '../../persistence/import-export';
 import { useWorkspaceStore } from '../../store/workspace-store';
 import { Button } from '../ui';
 
@@ -45,6 +49,9 @@ export const CommandPalette: React.FC = () => {
   const toggleBottomDrawer = useWorkspaceStore((s) => s.toggleBottomDrawer);
   const loadWorkflow = useWorkspaceStore((s) => s.loadWorkflow);
   const createBlankWorkflow = useWorkspaceStore((s) => s.createBlankWorkflow);
+  const saveCurrentWorkflow = useWorkspaceStore((s) => s.saveCurrentWorkflow);
+  const setImportModalOpen = useWorkspaceStore((s) => s.setImportModalOpen);
+  const workflow = useWorkspaceStore((s) => s.workflow);
   const addToast = useWorkspaceStore((s) => s.addToast);
 
   const [query, setQuery] = useState('');
@@ -131,6 +138,36 @@ export const CommandPalette: React.FC = () => {
         },
       },
       {
+        id: 'cmd_save',
+        label: 'Save workflow to IndexedDB',
+        category: 'Persistence',
+        shortcut: 'Ctrl+S',
+        icon: <Save size={14} aria-hidden="true" />,
+        action: () => {
+          void saveCurrentWorkflow();
+          addToast('Workflow saved to IndexedDB.', 'neutral');
+        },
+      },
+      {
+        id: 'cmd_import_json',
+        label: 'Import workflow JSON...',
+        category: 'Persistence',
+        icon: <FileUp size={14} aria-hidden="true" />,
+        action: () => {
+          setImportModalOpen(true);
+        },
+      },
+      {
+        id: 'cmd_export_json',
+        label: 'Export workflow JSON',
+        category: 'Persistence',
+        icon: <Download size={14} aria-hidden="true" />,
+        action: () => {
+          downloadWorkflowJson(workflow);
+          addToast(`Exported "${workflow.name}" as JSON.`, 'neutral');
+        },
+      },
+      {
         id: 'cmd_validate',
         label: 'Validate workflow',
         category: 'Workflow',
@@ -193,10 +230,13 @@ export const CommandPalette: React.FC = () => {
     pasteClipboard,
     redo,
     runStaticValidation,
+    saveCurrentWorkflow,
+    setImportModalOpen,
     toggleBottomDrawer,
     toggleLeftSidebar,
     toggleRightInspector,
     undo,
+    workflow,
   ]);
 
   const filteredCommands = useMemo(() => {

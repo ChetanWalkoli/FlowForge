@@ -1,8 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  BookmarkPlus,
   CheckCircle2,
   Command,
+  Download,
   FilePlus2,
+  FileUp,
   MoreHorizontal,
   PanelBottom,
   PanelLeft,
@@ -11,9 +14,11 @@ import {
   Play,
   Redo2,
   RotateCcw,
+  Save,
   Undo2,
 } from 'lucide-react';
 import { EXPENSE_APPROVAL_WORKFLOW } from '../../domain/fixtures/expense-approval';
+import { downloadWorkflowJson } from '../../persistence/import-export';
 import { useWorkspaceStore } from '../../store/workspace-store';
 import { Button, ConfirmDialog, StatusBadge } from '../ui';
 
@@ -41,7 +46,9 @@ export const TopBar: React.FC = () => {
   const runStaticValidation = useWorkspaceStore((s) => s.runStaticValidation);
   const createBlankWorkflow = useWorkspaceStore((s) => s.createBlankWorkflow);
   const loadWorkflow = useWorkspaceStore((s) => s.loadWorkflow);
-  const markSaved = useWorkspaceStore((s) => s.markSaved);
+  const saveCurrentWorkflow = useWorkspaceStore((s) => s.saveCurrentWorkflow);
+  const saveAsCustomTemplate = useWorkspaceStore((s) => s.saveAsCustomTemplate);
+  const setImportModalOpen = useWorkspaceStore((s) => s.setImportModalOpen);
   const addToast = useWorkspaceStore((s) => s.addToast);
 
   const [isEditingName, setIsEditingName] = useState(false);
@@ -117,6 +124,20 @@ export const TopBar: React.FC = () => {
     );
   };
 
+  const handleSaveClick = async () => {
+    const ok = await saveCurrentWorkflow();
+    if (ok) {
+      addToast('Workflow saved to IndexedDB.', 'neutral');
+    } else {
+      addToast('Failed to save workflow to IndexedDB.', 'error');
+    }
+  };
+
+  const handleExportClick = () => {
+    downloadWorkflowJson(workflow);
+    addToast(`Exported "${workflow.name}" as JSON.`, 'neutral');
+  };
+
   return (
     <header className="ff-topbar" aria-label="Workspace top bar">
       <div className="ff-topbar__left">
@@ -125,10 +146,14 @@ export const TopBar: React.FC = () => {
           size="sm"
           iconOnly
           aria-label={
-            leftSidebarCollapsed ? 'Expand left sidebar' : 'Collapse left sidebar'
+            leftSidebarCollapsed
+              ? 'Expand left sidebar'
+              : 'Collapse left sidebar'
           }
           title={
-            leftSidebarCollapsed ? 'Expand left sidebar' : 'Collapse left sidebar'
+            leftSidebarCollapsed
+              ? 'Expand left sidebar'
+              : 'Collapse left sidebar'
           }
           onClick={toggleLeftSidebar}
         >
@@ -226,6 +251,19 @@ export const TopBar: React.FC = () => {
         <Button
           variant="secondary"
           size="sm"
+          leftIcon={<Save size={14} />}
+          aria-label="Save workflow"
+          title="Save workflow (Ctrl+S)"
+          onClick={() => {
+            void handleSaveClick();
+          }}
+        >
+          Save
+        </Button>
+
+        <Button
+          variant="secondary"
+          size="sm"
           leftIcon={<CheckCircle2 size={14} />}
           onClick={handleValidateClick}
         >
@@ -303,13 +341,54 @@ export const TopBar: React.FC = () => {
                 role="menuitem"
                 className="ff-topbar__dropdown-item"
                 onClick={() => {
-                  markSaved();
                   setOverflowOpen(false);
-                  addToast('Workflow saved.', 'neutral');
+                  void handleSaveClick();
                 }}
               >
                 <span>Save workflow</span>
                 <span className="ff-mono">Ctrl+S</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="ff-topbar__dropdown-item"
+                onClick={() => {
+                  setOverflowOpen(false);
+                  setImportModalOpen(true);
+                }}
+              >
+                <span>Import JSON...</span>
+                <FileUp size={13} aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="ff-topbar__dropdown-item"
+                onClick={() => {
+                  setOverflowOpen(false);
+                  handleExportClick();
+                }}
+              >
+                <span>Export JSON</span>
+                <Download size={13} aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="ff-topbar__dropdown-item"
+                onClick={async () => {
+                  setOverflowOpen(false);
+                  const saved = await saveAsCustomTemplate();
+                  if (saved) {
+                    addToast(
+                      `Saved "${saved.name}" to custom templates.`,
+                      'neutral',
+                    );
+                  }
+                }}
+              >
+                <span>Save as Template</span>
+                <BookmarkPlus size={13} aria-hidden="true" />
               </button>
               <button
                 type="button"
@@ -357,4 +436,3 @@ export const TopBar: React.FC = () => {
     </header>
   );
 };
-

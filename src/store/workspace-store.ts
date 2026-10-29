@@ -1,7 +1,8 @@
 /**
  * FlowForge — Workspace & Editor Zustand Store
  * Manages the active workflow document, bounded undo/redo history, multi-selection,
- * clipboard copy/paste, port-validated connections, UI layout state, and toast notifications.
+ * clipboard copy/paste, port-validated connections, IndexedDB persistence, custom templates,
+ * onboarding hints, UI layout state, and toast notifications.
  */
 
 import { create } from 'zustand';
@@ -22,9 +23,11 @@ import {
   validateConnection,
   validateWorkflow,
 } from '../domain/validation/graph-validator';
+import { defaultPersistenceAdapter } from '../persistence/indexeddb/indexeddb-adapter';
+import { serializeWorkflowForExport } from '../persistence/import-export';
 import type { ToastMessage } from '../components/ui/ToastRegion';
 
-export type SidebarTab = 'nodes' | 'templates' | 'outline';
+export type SidebarTab = 'nodes' | 'templates' | 'outline' | 'workflows';
 export type InspectorMode = 'overview' | 'node' | 'run' | 'error';
 export type BottomDrawerTab = 'validation' | 'output' | 'timeline' | 'tests';
 export type MobileWorkspaceTab = 'canvas' | 'inspector' | 'trace';
@@ -41,6 +44,16 @@ export interface WorkspaceState {
   workflow: WorkflowDocument;
   validationReport: ValidationReport;
   saveStatus: SaveStatus;
+  storageError: string | null;
+
+  // Persisted libraries (FR-052, FR-053, FR-062)
+  savedWorkflows: WorkflowDocument[];
+  customTemplates: WorkflowDocument[];
+  isHydrated: boolean;
+
+  // Onboarding & modals (FR-055, FR-061)
+  onboardingDismissed: boolean;
+  importModalOpen: boolean;
 
   // Bounded Undo / Redo stacks (FR-007)
   undoStack: WorkflowDocument[];
@@ -111,9 +124,19 @@ export interface WorkspaceState {
   undo: () => boolean;
   redo: () => boolean;
 
-  // Actions — Validation & Persistence state
+  // Actions — Validation & Persistence (FR-052, FR-053, FR-054, FR-055, FR-061, FR-062)
   runStaticValidation: () => ValidationReport;
   markSaved: () => void;
+  hydrateFromStorage: () => Promise<void>;
+  saveCurrentWorkflow: () => Promise<boolean>;
+  deleteSavedWorkflow: (id: string) => Promise<void>;
+  saveAsCustomTemplate: (customName?: string) => Promise<WorkflowDocument | null>;
+  deleteCustomTemplate: (id: string) => Promise<void>;
+  commitImportedWorkflow: (doc: WorkflowDocument) => Promise<WorkflowDocument>;
+  exportCurrentWorkflowJson: () => string;
+  dismissOnboarding: () => Promise<void>;
+  restoreOnboarding: () => Promise<void>;
+  setImportModalOpen: (open: boolean) => void;
 
   // Actions — Selection & Focus
   selectNode: (nodeId: string | null, multi?: boolean) => void;
@@ -151,6 +174,7 @@ export interface WorkspaceState {
 let nodeCounter = 100;
 let edgeCounter = 100;
 let toastCounter = 1;
+let workflowCounter = 1;
 
 function createInitialWorkflow(): WorkflowDocument {
   return structuredClone(EXPENSE_APPROVAL_WORKFLOW);
@@ -175,6 +199,14 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
     workflow: initialDoc,
     validationReport: initialValidation,
     saveStatus: 'saved',
+    storageError: null,
+
+    savedWorkflows: [initialDoc],
+    customTemplates: [],
+    isHydrated: false,
+
+    onboardingDismissed: false,
+    importModalOpen: false,
 
     undoStack: [],
     redoStack: [],
@@ -216,7 +248,13 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         activeRun: null,
         inspectorMode: 'overview',
         saveStatus: 'saved',
+        storageError: null,
       });
+      void defaultPersistenceAdapter
+        .saveWorkspaceMeta({ activeWorkflowId: cloned.id })
+        .catch(() => {
+          // Non-fatal metadata update
+        });
     },
 
     createBlankWorkflow: () => {
@@ -224,7 +262,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       const blankDoc: WorkflowDocument = {
         format: 'flowforge.workflow',
         formatVersion: 1,
-        id: `wf_${Date.now()}`,
+        id: `wf_${Date.now()}_${++workflowCounter}`,
         name: 'Untitled workflow',
         description: '',
         revision: 1,
@@ -748,7 +786,229 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
     },
 
     markSaved: () => {
-      set({ saveStatus: 'saved' });
+      set({ saveStatus: 'saved', storageError: null });
+    },
+
+    hydrateFromStorage: async () => {
+      try {
+        const [workflows, customTemplates, meta] = await Promise.all([
+          defaultPersistenceAdapter.listWorkflows(),
+          defaultPersistenceAdapter.listCustomTemplates(),
+          defaultPersistenceAdapter.getWorkspaceMeta(),
+        ]);
+
+        let activeDoc: WorkflowDocument | null = null;
+        if (meta.activeWorkflowId) {
+          activeDoc =
+            workflows.find((w) => w.id === meta.activeWorkflowId) ?? null;
+        }
+        if (!activeDoc && workflows.length > 0) {
+          activeDoc = workflows[0];
+        }
+
+        if (!activeDoc) {
+          // Seed initial Expense Approval workflow into IndexedDB
+          const seed = structuredClone(EXPENSE_APPROVAL_WORKFLOW);
+          await defaultPersistenceAdapter.saveWorkflow(seed);
+          await defaultPersistenceAdapter.saveWorkspaceMeta({
+            activeWorkflowId: seed.id,
+          });
+          set({
+            workflow: seed,
+            validationReport: validateWorkflow(seed),
+            savedWorkflows: [seed],
+            customTemplates,
+            onboardingDismissed: Boolean(meta.onboardingDismissed),
+            saveStatus: 'saved',
+            storageError: null,
+            isHydrated: true,
+          });
+          return;
+        }
+
+        set({
+          workflow: structuredClone(activeDoc),
+          validationReport: validateWorkflow(activeDoc),
+          savedWorkflows: workflows,
+          customTemplates,
+          onboardingDismissed: Boolean(meta.onboardingDismissed),
+          saveStatus: 'saved',
+          storageError: null,
+          isHydrated: true,
+        });
+      } catch (err) {
+        const msg =
+          err instanceof Error ? err.message : 'Failed to access IndexedDB';
+        set({
+          saveStatus: 'error',
+          storageError: msg,
+          isHydrated: true,
+        });
+      }
+    },
+
+    saveCurrentWorkflow: async () => {
+      const current = get().workflow;
+      set({ saveStatus: 'saving', storageError: null });
+      try {
+        const updatedDoc: WorkflowDocument = {
+          ...structuredClone(current),
+          updatedAt: new Date().toISOString(),
+        };
+        const saved = await defaultPersistenceAdapter.saveWorkflow(updatedDoc);
+        await defaultPersistenceAdapter.saveWorkspaceMeta({
+          activeWorkflowId: saved.id,
+        });
+        const allWorkflows = await defaultPersistenceAdapter.listWorkflows();
+        set({
+          workflow: saved,
+          savedWorkflows: allWorkflows,
+          saveStatus: 'saved',
+          storageError: null,
+        });
+        return true;
+      } catch (err) {
+        const msg =
+          err instanceof Error
+            ? err.message
+            : 'Unable to save workflow to IndexedDB';
+        set({
+          saveStatus: 'error',
+          storageError: msg,
+        });
+        return false;
+      }
+    },
+
+    deleteSavedWorkflow: async (id) => {
+      try {
+        await defaultPersistenceAdapter.deleteWorkflow(id);
+        const remaining = await defaultPersistenceAdapter.listWorkflows();
+        const isCurrent = get().workflow.id === id;
+
+        if (isCurrent) {
+          if (remaining.length > 0) {
+            get().loadWorkflow(remaining[0]);
+            set({ savedWorkflows: remaining });
+          } else {
+            const fallback = structuredClone(EXPENSE_APPROVAL_WORKFLOW);
+            await defaultPersistenceAdapter.saveWorkflow(fallback);
+            get().loadWorkflow(fallback);
+            set({ savedWorkflows: [fallback] });
+          }
+        } else {
+          set({ savedWorkflows: remaining });
+        }
+      } catch (err) {
+        const msg =
+          err instanceof Error
+            ? err.message
+            : 'Unable to delete workflow from IndexedDB';
+        get().addToast(msg, 'error');
+      }
+    },
+
+    saveAsCustomTemplate: async (customName) => {
+      try {
+        const current = get().workflow;
+        const now = new Date().toISOString();
+        const tplDoc: WorkflowDocument = {
+          ...structuredClone(current),
+          id: `tpl_custom_${Date.now()}_${++workflowCounter}`,
+          name: customName?.trim() || `${current.name} (Template)`,
+          revision: 1,
+          createdAt: now,
+          updatedAt: now,
+        };
+        const saved = await defaultPersistenceAdapter.saveCustomTemplate(tplDoc);
+        const allCustom = await defaultPersistenceAdapter.listCustomTemplates();
+        set({ customTemplates: allCustom });
+        return saved;
+      } catch (err) {
+        const msg =
+          err instanceof Error ? err.message : 'Failed to save custom template';
+        get().addToast(msg, 'error');
+        return null;
+      }
+    },
+
+    deleteCustomTemplate: async (id) => {
+      try {
+        await defaultPersistenceAdapter.deleteCustomTemplate(id);
+        const allCustom = await defaultPersistenceAdapter.listCustomTemplates();
+        set({ customTemplates: allCustom });
+      } catch (err) {
+        const msg =
+          err instanceof Error
+            ? err.message
+            : 'Failed to delete custom template';
+        get().addToast(msg, 'error');
+      }
+    },
+
+    commitImportedWorkflow: async (doc) => {
+      // Store imported workflow as a new local workflow; never execute automatically (PRD.md Journey D #6)
+      const now = new Date().toISOString();
+      const importedDoc: WorkflowDocument = {
+        ...structuredClone(doc),
+        id: `wf_import_${Date.now()}_${++workflowCounter}`,
+        createdAt: doc.createdAt || now,
+        updatedAt: now,
+      };
+      const saved = await defaultPersistenceAdapter.saveWorkflow(importedDoc);
+      await defaultPersistenceAdapter.saveWorkspaceMeta({
+        activeWorkflowId: saved.id,
+      });
+      const allWorkflows = await defaultPersistenceAdapter.listWorkflows();
+      const report = validateWorkflow(saved);
+
+      set({
+        workflow: saved,
+        validationReport: report,
+        savedWorkflows: allWorkflows,
+        undoStack: [],
+        redoStack: [],
+        selectedNodeId: null,
+        selectedNodeIds: [],
+        selectedEdgeId: null,
+        activeRun: null,
+        inspectorMode: 'overview',
+        saveStatus: 'saved',
+        storageError: null,
+        importModalOpen: false,
+      });
+
+      return saved;
+    },
+
+    exportCurrentWorkflowJson: () => {
+      return serializeWorkflowForExport(get().workflow);
+    },
+
+    dismissOnboarding: async () => {
+      set({ onboardingDismissed: true });
+      try {
+        await defaultPersistenceAdapter.saveWorkspaceMeta({
+          onboardingDismissed: true,
+        });
+      } catch {
+        // Non-fatal
+      }
+    },
+
+    restoreOnboarding: async () => {
+      set({ onboardingDismissed: false });
+      try {
+        await defaultPersistenceAdapter.saveWorkspaceMeta({
+          onboardingDismissed: false,
+        });
+      } catch {
+        // Non-fatal
+      }
+    },
+
+    setImportModalOpen: (open) => {
+      set({ importModalOpen: open });
     },
 
     selectNode: (nodeId, multi = false) => {

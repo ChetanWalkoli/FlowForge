@@ -5,13 +5,20 @@ import { ContextualInspector } from '../panels/ContextualInspector';
 import { Button, ToastRegion } from '../ui';
 import { BottomDrawer } from './BottomDrawer';
 import { CommandPalette } from './CommandPalette';
+import { ImportWorkflowModal } from './ImportWorkflowModal';
 import { NavigationSidebar } from './NavigationSidebar';
+import { OnboardingBanner } from './OnboardingBanner';
 import { TopBar } from './TopBar';
 
 export const AppShell: React.FC = () => {
+  const workflow = useWorkspaceStore((s) => s.workflow);
+  const saveStatus = useWorkspaceStore((s) => s.saveStatus);
+  const isHydrated = useWorkspaceStore((s) => s.isHydrated);
   const mobileActiveTab = useWorkspaceStore((s) => s.mobileActiveTab);
   const toasts = useWorkspaceStore((s) => s.toasts);
 
+  const hydrateFromStorage = useWorkspaceStore((s) => s.hydrateFromStorage);
+  const saveCurrentWorkflow = useWorkspaceStore((s) => s.saveCurrentWorkflow);
   const toggleCommandPalette = useWorkspaceStore((s) => s.toggleCommandPalette);
   const toggleLeftSidebar = useWorkspaceStore((s) => s.toggleLeftSidebar);
   const toggleRightInspector = useWorkspaceStore((s) => s.toggleRightInspector);
@@ -28,6 +35,22 @@ export const AppShell: React.FC = () => {
   );
   const addToast = useWorkspaceStore((s) => s.addToast);
 
+  // Hydrate saved workflows, custom templates, and onboarding state from IndexedDB on initial mount
+  useEffect(() => {
+    if (!isHydrated) {
+      void hydrateFromStorage();
+    }
+  }, [hydrateFromStorage, isHydrated]);
+
+  // Debounced autosave when workflow changes and isHydrated is true (PRD.md Phase 2 Task 7 / FR-052)
+  useEffect(() => {
+    if (!isHydrated || saveStatus !== 'unsaved') return;
+    const timer = window.setTimeout(() => {
+      void saveCurrentWorkflow();
+    }, 650);
+    return () => window.clearTimeout(timer);
+  }, [isHydrated, saveCurrentWorkflow, saveStatus, workflow]);
+
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -41,6 +64,16 @@ export const AppShell: React.FC = () => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         toggleCommandPalette();
+        return;
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        void saveCurrentWorkflow().then((ok) => {
+          if (ok) {
+            addToast('Workflow saved to IndexedDB.', 'neutral');
+          }
+        });
         return;
       }
 
@@ -105,6 +138,7 @@ export const AppShell: React.FC = () => {
     pasteClipboard,
     redo,
     removeSelectedElements,
+    saveCurrentWorkflow,
     toggleBottomDrawer,
     toggleCommandPalette,
     toggleLeftSidebar,
@@ -115,6 +149,7 @@ export const AppShell: React.FC = () => {
   return (
     <div className="ff-app-shell">
       <TopBar />
+      <OnboardingBanner />
 
       <div className="ff-workspace-body" data-mobile-tab={mobileActiveTab}>
         <NavigationSidebar />
@@ -152,6 +187,7 @@ export const AppShell: React.FC = () => {
       </nav>
 
       <CommandPalette />
+      <ImportWorkflowModal />
       <ToastRegion toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
