@@ -1,0 +1,1430 @@
+/**
+ * FlowForge — Precision Studio Design System Tokens & Global Styles
+ * Implements DESIGN.md §2 Visual Identity, Typography, Spacing, Motion, and Accessibility.
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* Surface Tokens (DESIGN.md §2) */
+  --bg-app: #0b0d0f;
+  --bg-panel: #111417;
+  --bg-elevated: #171b1f;
+  --bg-hover: #1d2328;
+  --bg-active: #232b30;
+
+  /* Border Tokens */
+  --border-subtle: #252c31;
+  --border-strong: #384148;
+
+  /* Typography Color Tokens */
+  --text-primary: #f2f4f5;
+  --text-secondary: #a0a9af;
+  --text-muted: #737e85;
+
+  /* Accent Tokens (Restrained Lime) */
+  --accent: #c4f36b;
+  --accent-hover: #d2ff83;
+  --accent-ink: #17200c;
+  --accent-subtle: rgba(196, 243, 107, 0.12);
+
+  /* Semantic Status Tokens */
+  --success: #7ed6a5;
+  --success-subtle: rgba(126, 214, 165, 0.14);
+  --warning: #e8b86d;
+  --warning-subtle: rgba(232, 184, 109, 0.14);
+  --danger: #f07878;
+  --danger-subtle: rgba(240, 120, 120, 0.14);
+  --info: #84b9f4;
+  --info-subtle: rgba(132, 185, 244, 0.14);
+
+  /* Canvas Grid */
+  --node-grid: #1a2024;
+
+  /* Typography Families */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    Oxygen, Ubuntu, Cantarell, sans-serif;
+  --font-mono: 'IBM Plex Mono', 'JetBrains Mono', 'Fira Code', ui-monospace,
+    SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  /* Font Sizes (DESIGN.md §2) */
+  --text-title: 20px;
+  --text-heading: 14px;
+  --text-body: 13px;
+  --text-secondary-size: 12px;
+  --text-compact: 11px;
+  --text-code: 12px;
+
+  /* Spacing Scale (4px Base Unit) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* Control & Panel Dimensions */
+  --control-height-sm: 32px;
+  --control-height: 36px;
+  --topbar-height: 56px;
+  --sidebar-width: 248px;
+  --sidebar-collapsed-width: 56px;
+  --inspector-width: 340px;
+  --drawer-height: 240px;
+
+  /* Border Radius (DESIGN.md §2) */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-modal: 12px;
+
+  /* Shadows (Subtle, reserved for overlays; no neon glow) */
+  --shadow-elevated: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --shadow-modal: 0 16px 40px rgba(0, 0, 0, 0.65);
+
+  /* Motion Timing (DESIGN.md §7) */
+  --transition-fast: 140ms cubic-bezier(0.2, 0, 0, 1);
+  --transition-panel: 200ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* Reduced Motion Override (DESIGN.md §7 & §9) */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --transition-fast: 0ms;
+    --transition-panel: 0ms;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background-color: var(--bg-app);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-body);
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Tabular Numerals for durations, timestamps, counts (DESIGN.md §2) */
+.ff-tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+.ff-mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-code);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Accessible Focus Ring (DESIGN.md §6 & §9) */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Custom Scrollbar for dark surfaces */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-panel);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* --- Reusable Precision Studio Component Classes --- */
+
+/* Button Component */
+.ff-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  height: var(--control-height);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  font-family: var(--font-sans);
+  font-size: var(--text-body);
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  transition:
+    background-color var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
+
+  &:disabled {
+    opacity: 0.48;
+    cursor: not-allowed;
+  }
+
+  &--sm {
+    height: var(--control-height-sm);
+    padding: 0 var(--space-2);
+    font-size: var(--text-secondary-size);
+  }
+
+  &--icon-only {
+    width: var(--control-height);
+    padding: 0;
+
+    &.ff-btn--sm {
+      width: var(--control-height-sm);
+    }
+  }
+
+  /* Primary: Lime fill with dark text (DESIGN.md §6) */
+  &--primary {
+    background-color: var(--accent);
+    color: var(--accent-ink);
+    border-color: var(--accent);
+    font-weight: 600;
+
+    &:hover:not(:disabled) {
+      background-color: var(--accent-hover);
+      border-color: var(--accent-hover);
+    }
+  }
+
+  /* Secondary: Neutral surface with subtle border */
+  &--secondary {
+    background-color: var(--bg-elevated);
+    color: var(--text-primary);
+    border-color: var(--border-subtle);
+
+    &:hover:not(:disabled) {
+      background-color: var(--bg-hover);
+      border-color: var(--border-strong);
+    }
+  }
+
+  /* Tertiary: Quiet text/icon button */
+  &--tertiary {
+    background-color: transparent;
+    color: var(--text-secondary);
+    border-color: transparent;
+
+    &:hover:not(:disabled) {
+      background-color: var(--bg-hover);
+      color: var(--text-primary);
+    }
+  }
+
+  /* Destructive: Danger color reserved for destructive actions */
+  &--destructive {
+    background-color: var(--danger-subtle);
+    color: var(--danger);
+    border-color: rgba(240, 120, 120, 0.35);
+
+    &:hover:not(:disabled) {
+      background-color: var(--danger);
+      color: #190909;
+      border-color: var(--danger);
+    }
+  }
+}
+
+/* Form Field & Inputs (DESIGN.md §6) */
+.ff-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  width: 100%;
+
+  &__label-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+
+  &__label {
+    font-size: var(--text-secondary-size);
+    font-weight: 500;
+    color: var(--text-primary);
+  }
+
+  &__badge {
+    font-size: var(--text-compact);
+    color: var(--text-muted);
+  }
+
+  &__input,
+  &__select,
+  &__textarea {
+    width: 100%;
+    min-height: var(--control-height);
+    padding: 6px var(--space-3);
+    background-color: var(--bg-panel);
+    color: var(--text-primary);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    font-family: var(--font-sans);
+    font-size: var(--text-body);
+    transition: border-color var(--transition-fast);
+
+    &::placeholder {
+      color: var(--text-muted);
+    }
+
+    &:hover:not(:disabled) {
+      border-color: var(--border-strong);
+    }
+
+    &:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    &--invalid {
+      border-color: var(--danger);
+    }
+
+    &--mono {
+      font-family: var(--font-mono);
+      font-size: var(--text-code);
+    }
+  }
+
+  &__textarea {
+    min-height: 76px;
+    resize: vertical;
+  }
+
+  &__helper {
+    font-size: var(--text-compact);
+    color: var(--text-muted);
+  }
+
+  &__error {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    font-size: var(--text-secondary-size);
+    color: var(--danger);
+  }
+}
+
+/* StatusBadge (Never communicates status by color alone — DESIGN.md §2 & §9) */
+.ff-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  font-size: var(--text-compact);
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  background-color: var(--bg-elevated);
+  color: var(--text-secondary);
+
+  &--success {
+    background-color: var(--success-subtle);
+    color: var(--success);
+    border-color: rgba(126, 214, 165, 0.35);
+  }
+
+  &--running {
+    background-color: var(--accent-subtle);
+    color: var(--accent);
+    border-color: rgba(196, 243, 107, 0.4);
+  }
+
+  &--warning {
+    background-color: var(--warning-subtle);
+    color: var(--warning);
+    border-color: rgba(232, 184, 109, 0.35);
+  }
+
+  &--danger,
+  &--failed {
+    background-color: var(--danger-subtle);
+    color: var(--danger);
+    border-color: rgba(240, 120, 120, 0.35);
+  }
+
+  &--info {
+    background-color: var(--info-subtle);
+    color: var(--info);
+    border-color: rgba(132, 185, 244, 0.35);
+  }
+
+  &--neutral,
+  &--pending,
+  &--skipped {
+    background-color: var(--bg-elevated);
+    color: var(--text-secondary);
+    border-color: var(--border-subtle);
+  }
+}
+
+/* EmptyState (DESIGN.md §4 & §10) */
+.ff-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: var(--space-6);
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius-md);
+  background-color: var(--bg-panel);
+  gap: var(--space-2);
+
+  &__icon {
+    color: var(--text-muted);
+    margin-bottom: var(--space-1);
+  }
+
+  &__title {
+    margin: 0;
+    font-size: var(--text-heading);
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  &__description {
+    margin: 0;
+    max-width: 360px;
+    font-size: var(--text-secondary-size);
+    color: var(--text-secondary);
+  }
+
+  &__shortcut {
+    margin-top: var(--space-1);
+    font-family: var(--font-mono);
+    font-size: var(--text-compact);
+    color: var(--text-muted);
+  }
+
+  &__actions {
+    margin-top: var(--space-2);
+    display: flex;
+    gap: var(--space-2);
+  }
+}
+
+/* ConfirmDialog / Modal (DESIGN.md §6 & §10) */
+.ff-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background-color: rgba(6, 8, 10, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+}
+
+.ff-dialog {
+  width: 100%;
+  max-width: 460px;
+  background-color: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-modal);
+  box-shadow: var(--shadow-modal);
+  padding: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+
+  &__header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+
+  &__title {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  &__description {
+    margin: 0;
+    font-size: var(--text-body);
+    color: var(--text-secondary);
+  }
+
+  &__footer {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    padding-top: var(--space-2);
+    border-top: 1px solid var(--border-subtle);
+  }
+}
+
+/* ToastRegion (DESIGN.md §6 & §10) */
+.ff-toast-region {
+  position: fixed;
+  bottom: var(--space-4);
+  right: var(--space-4);
+  z-index: 1100;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-width: 360px;
+  pointer-events: none;
+}
+
+.ff-toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background-color: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-elevated);
+  color: var(--text-primary);
+  font-size: var(--text-secondary-size);
+
+  &--error {
+    border-color: var(--danger);
+  }
+
+  &--warning {
+    border-color: var(--warning);
+  }
+}
+
+/* PayloadViewer (DESIGN.md §5 & §10) */
+.ff-payload-viewer {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background-color: var(--bg-app);
+  overflow: hidden;
+
+  &__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-1) var(--space-3);
+    background-color: var(--bg-panel);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  &__title {
+    font-size: var(--text-compact);
+    font-weight: 600;
+    color: var(--text-secondary);
+  }
+
+  &__controls {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+  }
+
+  &__code {
+    margin: 0;
+    padding: var(--space-3);
+    font-family: var(--font-mono);
+    font-size: var(--text-code);
+    line-height: 1.5;
+    color: var(--text-primary);
+    overflow-x: auto;
+    max-height: 280px;
+    overflow-y: auto;
+    tab-size: 2;
+
+    &--wrap {
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+  }
+}
+
+
+/* --- Phase 2: Application Shell, Navigation, Inspector, Bottom Drawer & Command Palette --- */
+
+.ff-app-shell {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100vh;
+  overflow: hidden;
+  background-color: var(--bg-app);
+  color: var(--text-primary);
+}
+
+/* TopBar (DESIGN.md §3) */
+.ff-topbar {
+  height: var(--topbar-height);
+  min-height: var(--topbar-height);
+  background-color: var(--bg-panel);
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--space-4);
+  gap: var(--space-3);
+  z-index: 20;
+
+  &__left,
+  &__center,
+  &__right {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  &__left {
+    min-width: 0;
+    flex: 1;
+  }
+
+  &__brand {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-weight: 600;
+    font-size: var(--text-heading);
+    color: var(--text-primary);
+    letter-spacing: -0.01em;
+    white-space: nowrap;
+  }
+
+  &__brand-mark {
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    background-color: var(--accent);
+    display: inline-block;
+  }
+
+  &__divider {
+    color: var(--border-strong);
+    user-select: none;
+  }
+
+  &__title-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    height: var(--control-height-sm);
+    padding: 0 var(--space-2);
+    border-radius: var(--radius-sm);
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: var(--text-body);
+    font-weight: 500;
+    cursor: pointer;
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+
+    &:hover {
+      background-color: var(--bg-hover);
+      border-color: var(--border-subtle);
+    }
+  }
+
+  &__title-input {
+    height: var(--control-height-sm);
+    padding: 0 var(--space-2);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--accent);
+    background-color: var(--bg-app);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: var(--text-body);
+    font-weight: 500;
+    width: 220px;
+  }
+
+  &__revision {
+    font-family: var(--font-mono);
+    font-size: var(--text-compact);
+    color: var(--text-muted);
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    background-color: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+  }
+
+  &__menu-wrapper {
+    position: relative;
+  }
+
+  &__dropdown {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    min-width: 210px;
+    background-color: var(--bg-elevated);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-elevated);
+    padding: var(--space-1);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    z-index: 100;
+  }
+
+  &__dropdown-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    width: 100%;
+    padding: var(--space-2) var(--space-3);
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: var(--text-body);
+    text-align: left;
+    cursor: pointer;
+
+    &:hover {
+      background-color: var(--bg-hover);
+    }
+
+    &--danger {
+      color: var(--danger);
+    }
+  }
+}
+
+/* Main Three-Part Workspace Grid (DESIGN.md §3) */
+.ff-workspace-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  overflow: hidden;
+  position: relative;
+}
+
+/* Left Sidebar / Node Library (DESIGN.md §3: 220-260px, collapsible to 56px) */
+.ff-sidebar {
+  width: var(--sidebar-width);
+  min-width: var(--sidebar-width);
+  background-color: var(--bg-panel);
+  border-right: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  transition:
+    width var(--transition-panel),
+    min-width var(--transition-panel);
+  z-index: 10;
+
+  &--collapsed {
+    width: var(--sidebar-collapsed-width);
+    min-width: var(--sidebar-collapsed-width);
+  }
+
+  &__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-2);
+    border-bottom: 1px solid var(--border-subtle);
+    min-height: 44px;
+  }
+
+  &__tabs {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    flex: 1;
+  }
+
+  &__tab {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 30px;
+    padding: 0 var(--space-2);
+    border-radius: var(--radius-sm);
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text-secondary);
+    font-family: var(--font-sans);
+    font-size: var(--text-secondary-size);
+    font-weight: 500;
+    cursor: pointer;
+
+    &:hover {
+      color: var(--text-primary);
+      background-color: var(--bg-hover);
+    }
+
+    &--active {
+      color: var(--text-primary);
+      background-color: var(--bg-active);
+      border-color: var(--border-subtle);
+    }
+  }
+
+  &__rail {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: var(--space-2) 0;
+    gap: var(--space-2);
+  }
+
+  &__content {
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--space-3);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+}
+
+/* Node Library items */
+.ff-node-library {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+
+  &__category {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  &__category-title {
+    margin: 0;
+    font-size: var(--text-compact);
+    font-weight: 600;
+    color: var(--text-muted);
+    letter-spacing: 0.02em;
+  }
+
+  &__list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  &__item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    background-color: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    text-align: left;
+    cursor: grab;
+    transition:
+      border-color var(--transition-fast),
+      background-color var(--transition-fast);
+
+    &:hover {
+      background-color: var(--bg-hover);
+      border-color: var(--border-strong);
+    }
+
+    &:active {
+      cursor: grabbing;
+    }
+  }
+
+  &__item-info {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+
+  &__item-icon {
+    color: var(--text-secondary);
+    margin-top: 2px;
+    flex-shrink: 0;
+  }
+
+  &__item-title {
+    font-size: var(--text-body);
+    font-weight: 500;
+    color: var(--text-primary);
+    display: block;
+  }
+
+  &__item-subtitle {
+    font-size: var(--text-compact);
+    color: var(--text-secondary);
+    display: block;
+  }
+}
+
+/* Central Workspace Column (Canvas + Bottom Drawer) */
+.ff-center-column {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--bg-app);
+  position: relative;
+}
+
+.ff-canvas-viewport {
+  flex: 1;
+  min-height: 240px;
+  position: relative;
+  overflow: auto;
+  background-color: var(--bg-app);
+  background-image: radial-gradient(var(--node-grid) 1px, transparent 1px);
+  background-size: 20px 20px;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-5);
+}
+
+/* Node Cards inside Canvas Stage */
+.ff-stage-grid {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-4);
+}
+
+.ff-node-card {
+  width: 230px;
+  background-color: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  cursor: pointer;
+  transition:
+    border-color var(--transition-fast),
+    background-color var(--transition-fast);
+
+  &:hover {
+    border-color: var(--border-strong);
+    background-color: var(--bg-hover);
+  }
+
+  &--selected {
+    border-color: var(--accent);
+    box-shadow: inset 3px 0 0 0 var(--accent);
+  }
+
+  &--invalid {
+    border-color: var(--danger);
+  }
+
+  &__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+
+  &__title-group {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+
+  &__title {
+    font-size: var(--text-body);
+    font-weight: 600;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: var(--text-compact);
+    color: var(--text-muted);
+  }
+}
+
+/* Right Contextual Inspector (DESIGN.md §3: 300-360px, collapsible) */
+.ff-inspector {
+  width: var(--inspector-width);
+  min-width: var(--inspector-width);
+  background-color: var(--bg-panel);
+  border-left: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  z-index: 10;
+
+  &--collapsed {
+    width: 44px;
+    min-width: 44px;
+  }
+
+  &__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-2) var(--space-3);
+    border-bottom: 1px solid var(--border-subtle);
+    min-height: 44px;
+  }
+
+  &__title {
+    margin: 0;
+    font-size: var(--text-heading);
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  &__mode-tabs {
+    display: flex;
+    gap: var(--space-1);
+    padding: var(--space-2) var(--space-3);
+    border-bottom: 1px solid var(--border-subtle);
+    background-color: var(--bg-app);
+  }
+
+  &__body {
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--space-4);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+
+  &__section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding-bottom: var(--space-4);
+    border-bottom: 1px solid var(--border-subtle);
+
+    &:last-child {
+      border-bottom: none;
+      padding-bottom: 0;
+    }
+  }
+
+  &__section-title {
+    margin: 0;
+    font-size: var(--text-secondary-size);
+    font-weight: 600;
+    color: var(--text-secondary);
+  }
+}
+
+/* Bottom Execution & Validation Drawer (DESIGN.md §3: 180-280px when expanded) */
+.ff-bottom-drawer {
+  background-color: var(--bg-panel);
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  z-index: 15;
+
+  &--open {
+    height: var(--drawer-height);
+    min-height: 180px;
+  }
+
+  &--closed {
+    height: 38px;
+    min-height: 38px;
+  }
+
+  &__bar {
+    height: 38px;
+    min-height: 38px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 var(--space-3);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  &__tabs {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+  }
+
+  &__tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 28px;
+    padding: 0 var(--space-3);
+    border-radius: var(--radius-sm);
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text-secondary);
+    font-family: var(--font-sans);
+    font-size: var(--text-secondary-size);
+    font-weight: 500;
+    cursor: pointer;
+
+    &:hover {
+      color: var(--text-primary);
+      background-color: var(--bg-hover);
+    }
+
+    &--active {
+      color: var(--text-primary);
+      background-color: var(--bg-active);
+      border-color: var(--border-subtle);
+    }
+  }
+
+  &__content {
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--space-3) var(--space-4);
+  }
+}
+
+.ff-issue-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+
+  &__item {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    background-color: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    text-align: left;
+    width: 100%;
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+
+    &:hover {
+      background-color: var(--bg-hover);
+      border-color: var(--border-strong);
+    }
+  }
+}
+
+/* Searchable Command Palette (FR-008, DESIGN.md §6) */
+.ff-command-palette {
+  width: 100%;
+  max-width: 540px;
+  background-color: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-modal);
+  box-shadow: var(--shadow-modal);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+
+  &__search-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-4);
+    border-bottom: 1px solid var(--border-subtle);
+    background-color: var(--bg-panel);
+  }
+
+  &__input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: var(--text-heading);
+
+    &:focus {
+      outline: none;
+    }
+
+    &::placeholder {
+      color: var(--text-muted);
+    }
+  }
+
+  &__list {
+    max-height: 320px;
+    overflow-y: auto;
+    padding: var(--space-2);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  &__item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    width: 100%;
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: var(--text-body);
+    text-align: left;
+    cursor: pointer;
+
+    &:hover,
+    &--active {
+      background-color: var(--bg-hover);
+      border-color: var(--border-subtle);
+    }
+  }
+
+  &__shortcut {
+    font-family: var(--font-mono);
+    font-size: var(--text-compact);
+    color: var(--text-muted);
+    padding: 2px 6px;
+    border-radius: 4px;
+    background-color: var(--bg-panel);
+    border: 1px solid var(--border-subtle);
+  }
+}
+
+/* Mobile Responsive Navigation Bar (< 768px — DESIGN.md §8) */
+.ff-mobile-nav {
+  display: none;
+  height: 44px;
+  background-color: var(--bg-panel);
+  border-top: 1px solid var(--border-subtle);
+  align-items: center;
+  justify-content: space-around;
+  padding: 0 var(--space-2);
+}
+
+@media (max-width: 1024px) {
+  .ff-inspector:not(.ff-inspector--collapsed) {
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    box-shadow: var(--shadow-elevated);
+  }
+}
+
+@media (max-width: 767px) {
+  .ff-mobile-nav {
+    display: flex;
+  }
+
+  .ff-workspace-body[data-mobile-tab='inspector'] {
+    .ff-sidebar,
+    .ff-center-column {
+      display: none;
+    }
+
+    .ff-inspector {
+      position: static;
+      width: 100%;
+      min-width: 100%;
+    }
+  }
+
+  .ff-workspace-body[data-mobile-tab='trace'] {
+    .ff-sidebar,
+    .ff-inspector,
+    .ff-canvas-viewport {
+      display: none;
+    }
+
+    .ff-bottom-drawer {
+      flex: 1;
+      height: 100%;
+    }
+  }
+}
+
+/* --- Phase 3: React Flow Canvas, Handles, Connections & Controls (DESIGN.md §4) --- */
+
+.ff-canvas-viewport {
+  padding: 0;
+  overflow: hidden;
+}
+
+.ff-reactflow-wrapper {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  flex: 1;
+}
+
+.ff-node-card {
+  position: relative;
+
+  &--running {
+    border-color: var(--accent);
+  }
+
+  &--success {
+    border-color: var(--success);
+  }
+
+  &--failed {
+    border-color: var(--danger);
+  }
+
+  &--skipped {
+    opacity: 0.68;
+  }
+}
+
+/* Typed Input / Output Handles (DESIGN.md §4) */
+.ff-handle {
+  width: 10px !important;
+  height: 10px !important;
+  background-color: var(--bg-panel) !important;
+  border: 2px solid var(--border-strong) !important;
+  border-radius: 50% !important;
+  transition:
+    border-color var(--transition-fast),
+    background-color var(--transition-fast),
+    transform var(--transition-fast);
+
+  &:hover,
+  &:focus-visible {
+    border-color: var(--accent) !important;
+    background-color: var(--accent) !important;
+    transform: scale(1.2);
+  }
+
+  &--true {
+    border-color: var(--success) !important;
+  }
+
+  &--false {
+    border-color: var(--warning) !important;
+  }
+}
+
+.ff-handle-wrapper {
+  position: absolute;
+  right: 0;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  pointer-events: none;
+
+  .react-flow__handle {
+    pointer-events: all;
+  }
+}
+
+.ff-handle-label {
+  position: absolute;
+  right: 10px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background-color: var(--bg-panel);
+  color: var(--text-secondary);
+  pointer-events: none;
+
+  &--true {
+    color: var(--success);
+  }
+
+  &--false {
+    color: var(--warning);
+  }
+}
+
+/* Floating Canvas Controls Group (DESIGN.md §4) */
+.ff-canvas-controls {
+  position: absolute;
+  left: var(--space-4);
+  bottom: var(--space-4);
+  z-index: 10;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  background-color: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-elevated);
+
+  &__zoom {
+    min-width: 44px;
+    text-align: center;
+    font-size: var(--text-compact);
+    color: var(--text-secondary);
+    padding: 0 4px;
+  }
+
+  &__divider {
+    width: 1px;
+    height: 18px;
+    background-color: var(--border-subtle);
+    margin: 0 2px;
+  }
+}
