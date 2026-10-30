@@ -4,7 +4,11 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  Clock,
   Copy,
+  GitBranch,
+  History,
+  RotateCcw,
   SlidersHorizontal,
   Trash2,
 } from 'lucide-react';
@@ -13,6 +17,13 @@ import { useWorkspaceStore } from '../../store/workspace-store';
 import { Button, EmptyState, Input, PayloadViewer, StatusBadge } from '../ui';
 import { NodeCategoryIcon } from '../ui/NodeCategoryIcon';
 import { NodeConfigForm } from './NodeConfigForm';
+
+function formatRunTimestamp(epochMs?: number): string {
+  if (typeof epochMs !== 'number' || !Number.isFinite(epochMs)) {
+    return '—';
+  }
+  return new Date(epochMs).toISOString();
+}
 
 export const ContextualInspector: React.FC = () => {
   const collapsed = useWorkspaceStore((s) => s.rightInspectorCollapsed);
@@ -23,6 +34,7 @@ export const ContextualInspector: React.FC = () => {
   const selectedEdgeId = useWorkspaceStore((s) => s.selectedEdgeId);
   const validationReport = useWorkspaceStore((s) => s.validationReport);
   const activeRun = useWorkspaceStore((s) => s.activeRun);
+  const runHistory = useWorkspaceStore((s) => s.runHistory);
 
   const toggleRightInspector = useWorkspaceStore((s) => s.toggleRightInspector);
   const setInspectorMode = useWorkspaceStore((s) => s.setInspectorMode);
@@ -36,6 +48,8 @@ export const ContextualInspector: React.FC = () => {
   const duplicateNodes = useWorkspaceStore((s) => s.duplicateNodes);
   const connectNodes = useWorkspaceStore((s) => s.connectNodes);
   const runStaticValidation = useWorkspaceStore((s) => s.runStaticValidation);
+  const setActiveRun = useWorkspaceStore((s) => s.setActiveRun);
+  const clearActiveRun = useWorkspaceStore((s) => s.clearActiveRun);
   const addToast = useWorkspaceStore((s) => s.addToast);
 
   const selectedNode =
@@ -47,6 +61,14 @@ export const ContextualInspector: React.FC = () => {
   const nodeIssues = selectedNode
     ? validationReport.issues.filter((i) => i.nodeId === selectedNode.id)
     : [];
+
+  const selectedNodeTrace =
+    selectedNode && activeRun
+      ? (activeRun.nodeTraces[selectedNode.id] ?? null)
+      : null;
+
+  const runtimeErrorCount = activeRun?.status === 'failed' ? 1 : 0;
+  const totalErrorsCount = validationReport.errorsCount + runtimeErrorCount;
 
   if (collapsed) {
     return (
@@ -153,9 +175,9 @@ export const ContextualInspector: React.FC = () => {
           onClick={() => setInspectorMode('error')}
         >
           Errors
-          {validationReport.errorsCount > 0 && (
+          {totalErrorsCount > 0 && (
             <span className="ff-tabular" style={{ color: 'var(--danger)' }}>
-              ({validationReport.errorsCount})
+              ({totalErrorsCount})
             </span>
           )}
         </button>
@@ -298,18 +320,23 @@ export const ContextualInspector: React.FC = () => {
                     </div>
                     <StatusBadge
                       status={
-                        nodeIssues.some((i) => i.severity === 'error')
-                          ? 'failed'
-                          : nodeIssues.length > 0
-                            ? 'warning'
-                            : 'success'
+                        selectedNodeTrace
+                          ? selectedNodeTrace.status
+                          : nodeIssues.some((i) => i.severity === 'error')
+                            ? 'failed'
+                            : nodeIssues.length > 0
+                              ? 'warning'
+                              : 'success'
                       }
                       label={
-                        nodeIssues.some((i) => i.severity === 'error')
-                          ? 'Invalid'
-                          : nodeIssues.length > 0
-                            ? 'Warning'
-                            : 'Valid'
+                        selectedNodeTrace
+                          ? selectedNodeTrace.status.charAt(0).toUpperCase() +
+                            selectedNodeTrace.status.slice(1)
+                          : nodeIssues.some((i) => i.severity === 'error')
+                            ? 'Invalid'
+                            : nodeIssues.length > 0
+                              ? 'Warning'
+                              : 'Valid'
                       }
                     />
                   </div>
@@ -339,6 +366,276 @@ export const ContextualInspector: React.FC = () => {
                   >
                     {getNodeSpecification(selectedNode.type).description}
                   </p>
+                </section>
+
+                {/* Runtime Execution Trace for Selected Node */}
+                <section
+                  className="ff-inspector__section"
+                  aria-label="Node execution trace"
+                >
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                    }}
+                  >
+                    <h3 className="ff-inspector__section-title">
+                      Execution Trace
+                    </h3>
+                    <StatusBadge
+                      status={selectedNodeTrace?.status ?? 'pending'}
+                      label={
+                        selectedNodeTrace
+                          ? selectedNodeTrace.status.charAt(0).toUpperCase() +
+                            selectedNodeTrace.status.slice(1)
+                          : 'Not Executed'
+                      }
+                    />
+                  </div>
+
+                  {!activeRun ||
+                  !selectedNodeTrace ||
+                  selectedNodeTrace.status === 'pending' ? (
+                    <div
+                      style={{
+                        fontSize: 'var(--text-secondary-size)',
+                        color: 'var(--text-secondary)',
+                      }}
+                    >
+                      Node has not executed yet. Run the workflow to inspect
+                      runtime input, output, and timing for this node.
+                    </div>
+                  ) : (
+                    <div
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 'var(--space-2)',
+                      }}
+                    >
+                      <div
+                        className="ff-mono"
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns: 'auto 1fr',
+                          gap: '4px 12px',
+                          fontSize: 'var(--text-compact)',
+                          color: 'var(--text-secondary)',
+                          padding: 'var(--space-2)',
+                          borderRadius: 'var(--radius-sm)',
+                          backgroundColor: 'var(--bg-elevated)',
+                          border: '1px solid var(--border-subtle)',
+                        }}
+                      >
+                        <span style={{ color: 'var(--text-muted)' }}>
+                          Status:
+                        </span>
+                        <span>{selectedNodeTrace.status}</span>
+                        <span style={{ color: 'var(--text-muted)' }}>
+                          Started:
+                        </span>
+                        <span>
+                          {formatRunTimestamp(selectedNodeTrace.startedAt)}
+                        </span>
+                        <span style={{ color: 'var(--text-muted)' }}>
+                          Completed:
+                        </span>
+                        <span>
+                          {formatRunTimestamp(selectedNodeTrace.completedAt)}
+                        </span>
+                        <span style={{ color: 'var(--text-muted)' }}>
+                          Duration:
+                        </span>
+                        <span className="ff-tabular">
+                          {selectedNodeTrace.durationMs !== undefined
+                            ? `${selectedNodeTrace.durationMs}ms`
+                            : '—'}
+                        </span>
+                      </div>
+
+                      {selectedNodeTrace.status === 'skipped' && (
+                        <div
+                          style={{
+                            padding: 'var(--space-2)',
+                            borderRadius: 'var(--radius-sm)',
+                            backgroundColor: 'var(--bg-elevated)',
+                            border: '1px solid var(--border-subtle)',
+                            fontSize: 'var(--text-secondary-size)',
+                            color: 'var(--text-secondary)',
+                          }}
+                        >
+                          <strong>Skip Reason:</strong>{' '}
+                          {selectedNodeTrace.skipReason ??
+                            'Upstream branch was not selected.'}
+                        </div>
+                      )}
+
+                      {selectedNode.type === 'condition' &&
+                        selectedNodeTrace.conditionReason && (
+                          <div
+                            aria-label="Condition evaluation explainability"
+                            style={{
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: 'var(--space-1)',
+                              padding: 'var(--space-2)',
+                              borderRadius: 'var(--radius-sm)',
+                              backgroundColor: 'var(--bg-elevated)',
+                              border: '1px solid var(--border-strong)',
+                              fontSize: 'var(--text-secondary-size)',
+                            }}
+                          >
+                            <div
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                fontWeight: 600,
+                              }}
+                            >
+                              <span
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '6px',
+                                }}
+                              >
+                                <GitBranch size={13} aria-hidden="true" />
+                                <span>Condition Explainability</span>
+                              </span>
+                              <StatusBadge
+                                status={
+                                  selectedNodeTrace.conditionReason.result
+                                    ? 'success'
+                                    : 'warning'
+                                }
+                                label={`Branch: ${
+                                  selectedNodeTrace.selectedHandleId ??
+                                  (selectedNodeTrace.conditionReason.result
+                                    ? 'true'
+                                    : 'false')
+                                }`}
+                              />
+                            </div>
+                            <div className="ff-mono">
+                              <span style={{ color: 'var(--text-muted)' }}>
+                                Expression:{' '}
+                              </span>
+                              <span>
+                                {selectedNodeTrace.conditionReason.leftSource}.
+                                {selectedNodeTrace.conditionReason.leftPath}{' '}
+                                {selectedNodeTrace.conditionReason.operator}{' '}
+                                {selectedNodeTrace.conditionReason.rightValue !==
+                                undefined
+                                  ? JSON.stringify(
+                                      selectedNodeTrace.conditionReason
+                                        .rightValue,
+                                    )
+                                  : ''}
+                              </span>
+                            </div>
+                            <div className="ff-mono">
+                              <span style={{ color: 'var(--text-muted)' }}>
+                                Left Operand:{' '}
+                              </span>
+                              <span>
+                                {JSON.stringify(
+                                  selectedNodeTrace.conditionReason.leftValue,
+                                )}
+                              </span>
+                            </div>
+                            <div className="ff-mono">
+                              <span style={{ color: 'var(--text-muted)' }}>
+                                Operator:{' '}
+                              </span>
+                              <span>
+                                {selectedNodeTrace.conditionReason.operator}
+                              </span>
+                            </div>
+                            {selectedNodeTrace.conditionReason.rightValue !==
+                              undefined && (
+                              <div className="ff-mono">
+                                <span style={{ color: 'var(--text-muted)' }}>
+                                  Right Operand:{' '}
+                                </span>
+                                <span>
+                                  {JSON.stringify(
+                                    selectedNodeTrace.conditionReason.rightValue,
+                                  )}
+                                </span>
+                              </div>
+                            )}
+                            <div className="ff-mono">
+                              <span style={{ color: 'var(--text-muted)' }}>
+                                Evaluated Result:{' '}
+                              </span>
+                              <strong>
+                                {String(
+                                  selectedNodeTrace.conditionReason.result,
+                                )}
+                              </strong>
+                            </div>
+                            <div style={{ color: 'var(--text-secondary)' }}>
+                              {selectedNodeTrace.conditionReason.explanation}
+                            </div>
+                          </div>
+                        )}
+
+                      {selectedNodeTrace.status === 'failed' &&
+                        selectedNodeTrace.error && (
+                          <div
+                            role="alert"
+                            aria-label="Node runtime error details"
+                            style={{
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: 'var(--space-1)',
+                              padding: 'var(--space-2)',
+                              borderRadius: 'var(--radius-sm)',
+                              backgroundColor: 'var(--danger-subtle)',
+                              border: '1px solid var(--danger)',
+                              fontSize: 'var(--text-secondary-size)',
+                            }}
+                          >
+                            <div
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '6px',
+                                fontWeight: 600,
+                                color: 'var(--danger)',
+                              }}
+                            >
+                              <AlertCircle size={13} aria-hidden="true" />
+                              <span>{selectedNodeTrace.error.code}</span>
+                            </div>
+                            <div style={{ fontWeight: 600 }}>
+                              {selectedNodeTrace.error.message}
+                            </div>
+                            {selectedNodeTrace.error.remediation && (
+                              <div style={{ color: 'var(--text-secondary)' }}>
+                                {selectedNodeTrace.error.remediation}
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                      {selectedNodeTrace.input !== undefined && (
+                        <PayloadViewer
+                          title="Node Input Payload"
+                          payload={selectedNodeTrace.input}
+                        />
+                      )}
+
+                      {selectedNodeTrace.output !== undefined && (
+                        <PayloadViewer
+                          title="Node Output Payload"
+                          payload={selectedNodeTrace.output}
+                        />
+                      )}
+                    </div>
+                  )}
                 </section>
 
                 {/* Dynamic Contextual Configuration Form */}
@@ -550,27 +847,162 @@ export const ContextualInspector: React.FC = () => {
                 description="Execute the workflow using the Run button in the top bar to inspect live timing, status, and node payloads."
               />
             ) : (
+              <>
+                <section
+                  className="ff-inspector__section"
+                  aria-label="Active run summary"
+                >
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                    }}
+                  >
+                    <span className="ff-mono">{activeRun.runId}</span>
+                    <StatusBadge status={activeRun.status} />
+                  </div>
+                  <div
+                    className="ff-mono"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      fontSize: 'var(--text-compact)',
+                      color: 'var(--text-secondary)',
+                    }}
+                  >
+                    <span
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                      }}
+                    >
+                      <Clock size={12} aria-hidden="true" />
+                      <span>
+                        Duration:{' '}
+                        {activeRun.durationMs !== undefined
+                          ? `${activeRun.durationMs}ms`
+                          : 'running...'}
+                      </span>
+                    </span>
+                    <Button
+                      variant="tertiary"
+                      size="sm"
+                      leftIcon={<RotateCcw size={12} />}
+                      onClick={() => clearActiveRun()}
+                    >
+                      Clear Run Overlay
+                    </Button>
+                  </div>
+                  <PayloadViewer title="Run Input" payload={activeRun.input} />
+                  {activeRun.finalOutput !== undefined && (
+                    <PayloadViewer
+                      title="Final Output"
+                      payload={activeRun.finalOutput}
+                    />
+                  )}
+                </section>
+
+                <section
+                  className="ff-inspector__section"
+                  aria-label="Run node traces"
+                >
+                  <h3 className="ff-inspector__section-title">
+                    Node Execution Status
+                  </h3>
+                  <div className="ff-issue-list" role="list">
+                    {workflow.nodes.map((node) => {
+                      const trace = activeRun.nodeTraces[node.id];
+                      const status = trace?.status ?? 'pending';
+                      return (
+                        <button
+                          key={node.id}
+                          type="button"
+                          role="listitem"
+                          className="ff-issue-list__item"
+                          onClick={() => selectNode(node.id)}
+                        >
+                          <div
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '8px',
+                            }}
+                          >
+                            <StatusBadge
+                              status={status}
+                              label={
+                                status.charAt(0).toUpperCase() + status.slice(1)
+                              }
+                            />
+                            <span>{node.name}</span>
+                          </div>
+                          <span
+                            className="ff-mono"
+                            style={{ color: 'var(--text-muted)' }}
+                          >
+                            {trace?.durationMs !== undefined
+                              ? `${trace.durationMs}ms`
+                              : node.id}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </section>
+              </>
+            )}
+
+            {runHistory.length > 0 && (
               <section
                 className="ff-inspector__section"
-                aria-label="Active run summary"
+                aria-label="Workflow run history"
               >
                 <div
                   style={{
                     display: 'flex',
                     alignItems: 'center',
-                    justifyContent: 'space-between',
+                    gap: '6px',
                   }}
                 >
-                  <span className="ff-mono">{activeRun.runId}</span>
-                  <StatusBadge status={activeRun.status} />
+                  <History size={13} aria-hidden="true" />
+                  <h3 className="ff-inspector__section-title">
+                    Run History ({runHistory.length})
+                  </h3>
                 </div>
-                <PayloadViewer title="Run Input" payload={activeRun.input} />
-                {activeRun.finalOutput !== undefined && (
-                  <PayloadViewer
-                    title="Final Output"
-                    payload={activeRun.finalOutput}
-                  />
-                )}
+                <div className="ff-issue-list" role="list">
+                  {runHistory.map((run) => (
+                    <button
+                      key={run.runId}
+                      type="button"
+                      role="listitem"
+                      className="ff-issue-list__item"
+                      aria-label={`Inspect run ${run.runId}`}
+                      onClick={() => setActiveRun(run)}
+                    >
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '8px',
+                        }}
+                      >
+                        <StatusBadge status={run.status} />
+                        <span className="ff-mono">{run.runId}</span>
+                      </div>
+                      <span
+                        className="ff-mono"
+                        style={{ color: 'var(--text-muted)' }}
+                      >
+                        {run.durationMs !== undefined
+                          ? `${run.durationMs}ms`
+                          : '—'}
+                      </span>
+                    </button>
+                  ))}
+                </div>
               </section>
             )}
           </>
@@ -578,7 +1010,8 @@ export const ContextualInspector: React.FC = () => {
 
         {inspectorMode === 'error' && (
           <>
-            {validationReport.issues.length === 0 ? (
+            {validationReport.issues.length === 0 &&
+            activeRun?.status !== 'failed' ? (
               <EmptyState
                 icon={<CheckCircle2 size={18} />}
                 title="No validation or runtime errors"
@@ -586,6 +1019,61 @@ export const ContextualInspector: React.FC = () => {
               />
             ) : (
               <div className="ff-issue-list" role="list">
+                {activeRun?.status === 'failed' && activeRun.error && (
+                  <button
+                    type="button"
+                    role="listitem"
+                    className="ff-issue-list__item"
+                    aria-label={`Runtime error: ${activeRun.error.message}`}
+                    onClick={() => {
+                      if (activeRun.error?.nodeId) {
+                        selectNode(activeRun.error.nodeId);
+                      }
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '4px',
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          fontWeight: 600,
+                          color: 'var(--danger)',
+                        }}
+                      >
+                        <AlertCircle size={13} aria-hidden="true" />
+                        <span>
+                          [{activeRun.error.code}] {activeRun.error.message}
+                        </span>
+                      </div>
+                      {activeRun.error.remediation && (
+                        <span
+                          style={{
+                            fontSize: 'var(--text-compact)',
+                            color: 'var(--text-secondary)',
+                          }}
+                        >
+                          {activeRun.error.remediation}
+                        </span>
+                      )}
+                    </div>
+                    {activeRun.error.nodeId && (
+                      <span
+                        className="ff-mono"
+                        style={{ color: 'var(--text-muted)' }}
+                      >
+                        {activeRun.error.nodeId}
+                      </span>
+                    )}
+                  </button>
+                )}
+
                 {validationReport.issues.map((issue) => (
                   <button
                     key={issue.id}

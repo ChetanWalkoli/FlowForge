@@ -1,5 +1,6 @@
 import React from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
+import { AlertCircle } from 'lucide-react';
 import { getNodeSpecification } from '../../domain/registry/node-registry';
 import type {
   NodeStatus,
@@ -15,6 +16,10 @@ export interface FlowForgeNodeData extends Record<string, unknown> {
   hasValidationError: boolean;
   hasValidationWarning: boolean;
   executionStatus?: NodeStatus;
+  executionDurationMs?: number;
+  executionError?: string;
+  executionSkipReason?: string;
+  conditionSelectedBranch?: 'true' | 'false';
   outgoingCount: number;
 }
 
@@ -61,6 +66,10 @@ export const WorkflowNodeComponent: React.FC<NodeProps> = ({ data }) => {
     hasValidationError,
     hasValidationWarning,
     executionStatus,
+    executionDurationMs,
+    executionError,
+    executionSkipReason,
+    conditionSelectedBranch,
     outgoingCount,
   } = nodeData;
 
@@ -91,6 +100,7 @@ export const WorkflowNodeComponent: React.FC<NodeProps> = ({ data }) => {
       aria-selected={isSelected}
       data-node-id={domainNode.id}
       data-node-type={domainNode.type}
+      data-execution-status={executionStatus ?? 'idle'}
       className={[
         'ff-node-card',
         'nodrag',
@@ -146,9 +156,69 @@ export const WorkflowNodeComponent: React.FC<NodeProps> = ({ data }) => {
         {summarizeNodeConfig(domainNode)}
       </div>
 
+      {executionStatus === 'failed' && executionError && (
+        <div
+          role="alert"
+          data-testid={`node-runtime-error-${domainNode.id}`}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '4px',
+            marginTop: '4px',
+            padding: '2px 6px',
+            borderRadius: 'var(--radius-sm)',
+            backgroundColor: 'var(--danger-subtle)',
+            border: '1px solid var(--danger)',
+            color: 'var(--danger)',
+            fontSize: '10px',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+          title={executionError}
+        >
+          <AlertCircle size={11} aria-hidden="true" />
+          <span>{executionError}</span>
+        </div>
+      )}
+
+      {executionStatus === 'skipped' && executionSkipReason && (
+        <div
+          data-testid={`node-skip-reason-${domainNode.id}`}
+          style={{
+            marginTop: '2px',
+            fontSize: '10px',
+            color: 'var(--text-muted)',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+          title={executionSkipReason}
+        >
+          Skipped: {executionSkipReason}
+        </div>
+      )}
+
       <div className="ff-node-card__meta ff-mono">
         <span>{domainNode.id}</span>
-        <span>{outgoingCount} out</span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+          {conditionSelectedBranch && (
+            <span
+              style={{
+                color:
+                  conditionSelectedBranch === 'true'
+                    ? 'var(--success)'
+                    : 'var(--warning)',
+              }}
+            >
+              → {conditionSelectedBranch}
+            </span>
+          )}
+          {executionDurationMs !== undefined && (
+            <span className="ff-tabular">{executionDurationMs}ms</span>
+          )}
+          <span>{outgoingCount} out</span>
+        </span>
       </div>
 
       {/* Output Handles */}

@@ -198,9 +198,7 @@ describe('Precision Studio Reusable UI Primitives', () => {
 
     await user.click(screen.getByRole('button', { name: 'Run' }));
     expect(
-      screen.getByText(
-        'Workflow "Expense approval" validated and queued for execution.',
-      ),
+      screen.getByRole('dialog', { name: /Run Workflow: Expense approval/i }),
     ).toBeInTheDocument();
   });
 });

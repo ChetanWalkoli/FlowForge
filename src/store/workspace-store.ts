@@ -23,6 +23,10 @@ import {
   validateConnection,
   validateWorkflow,
 } from '../domain/validation/graph-validator';
+import {
+  executeWorkflow,
+  type ExecuteWorkflowOptions,
+} from '../engine';
 import { defaultPersistenceAdapter } from '../persistence/indexeddb/indexeddb-adapter';
 import { serializeWorkflowForExport } from '../persistence/import-export';
 import type { ToastMessage } from '../components/ui/ToastRegion';
@@ -54,6 +58,7 @@ export interface WorkspaceState {
   // Onboarding & modals (FR-055, FR-061)
   onboardingDismissed: boolean;
   importModalOpen: boolean;
+  runInputModalOpen: boolean;
 
   // Bounded Undo / Redo stacks (FR-007)
   undoStack: WorkflowDocument[];
@@ -65,8 +70,10 @@ export interface WorkspaceState {
   selectedEdgeId: string | null;
   clipboard: ClipboardSlice | null;
 
-  // Run & debugger context
+  // Run & debugger context (FR-025 through FR-042)
   activeRun: WorkflowRunRecord | null;
+  runHistory: WorkflowRunRecord[];
+  isExecuting: boolean;
   selectedTraceEventIndex: number | null;
 
   // Layout & panel visibility (DESIGN.md §3 & §8)
@@ -163,8 +170,17 @@ export interface WorkspaceState {
 
   setMobileActiveTab: (tab: MobileWorkspaceTab) => void;
 
-  // Actions — Run state
+  // Actions — Run state & runtime execution (FR-025 through FR-042)
+  setRunInputModalOpen: (open: boolean) => void;
+  executeCurrentWorkflow: (
+    inputOverride?: Record<string, unknown>,
+    options?: Omit<ExecuteWorkflowOptions, 'input' | 'signal' | 'onEvent'>,
+  ) => Promise<WorkflowRunRecord | null>;
+  cancelActiveRun: () => void;
+  clearActiveRun: () => void;
   setActiveRun: (run: WorkflowRunRecord | null) => void;
+  setSelectedTraceEventIndex: (index: number | null) => void;
+  loadRunHistory: (workflowId?: string) => Promise<WorkflowRunRecord[]>;
 
   // Actions — Toasts
   addToast: (message: string, tone?: ToastMessage['tone']) => void;
@@ -175,6 +191,12 @@ let nodeCounter = 100;
 let edgeCounter = 100;
 let toastCounter = 1;
 let workflowCounter = 1;
+
+/**
+ * Tracks active AbortControllers keyed by workflowId so each workflow can have at most
+ * one active execution at a time, and cancellation state is strictly scoped per run.
+ */
+const activeRunControllers = new Map<string, AbortController>();
 
 function createInitialWorkflow(): WorkflowDocument {
   return structuredClone(EXPENSE_APPROVAL_WORKFLOW);
@@ -189,6 +211,33 @@ function pushUndoSnapshot(
     return next.slice(next.length - MAX_UNDO_HISTORY);
   }
   return next;
+}
+
+/**
+ * Merges and deduplicates finalized run records for a specific workflow ID,
+ * keeping active (`running`) runs strictly separate from historical run records.
+ */
+function mergeAndDeduplicateRuns(
+  runs: WorkflowRunRecord[],
+  workflowId: string,
+): WorkflowRunRecord[] {
+  const byRunId = new Map<string, WorkflowRunRecord>();
+  for (const run of runs) {
+    if (
+      run &&
+      run.workflowId === workflowId &&
+      run.status !== 'running' &&
+      !byRunId.has(run.runId)
+    ) {
+      byRunId.set(run.runId, structuredClone(run));
+    }
+  }
+  return Array.from(byRunId.values()).sort((a, b) => {
+    if (b.startedAt !== a.startedAt) {
+      return b.startedAt - a.startedAt;
+    }
+    return b.runId.localeCompare(a.runId);
+  });
 }
 
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
@@ -207,6 +256,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
 
     onboardingDismissed: false,
     importModalOpen: false,
+    runInputModalOpen: false,
 
     undoStack: [],
     redoStack: [],
@@ -217,6 +267,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
     clipboard: null,
 
     activeRun: null,
+    runHistory: [],
+    isExecuting: false,
     selectedTraceEventIndex: null,
 
     leftSidebarCollapsed: false,
@@ -246,6 +298,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         selectedNodeIds: [],
         selectedEdgeId: null,
         activeRun: null,
+        runHistory: [],
+        isExecuting: activeRunControllers.has(cloned.id),
+        selectedTraceEventIndex: null,
+        runInputModalOpen: false,
         inspectorMode: 'overview',
         saveStatus: 'saved',
         storageError: null,
@@ -254,6 +310,21 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         .saveWorkspaceMeta({ activeWorkflowId: cloned.id })
         .catch(() => {
           // Non-fatal metadata update
+        });
+      void defaultPersistenceAdapter
+        .listRuns(cloned.id)
+        .then((runs) => {
+          if (get().workflow.id === cloned.id) {
+            set((s) => ({
+              runHistory: mergeAndDeduplicateRuns(
+                [...s.runHistory, ...runs],
+                cloned.id,
+              ),
+            }));
+          }
+        })
+        .catch(() => {
+          // Non-fatal run history load
         });
     },
 
@@ -282,6 +353,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         selectedNodeIds: [],
         selectedEdgeId: null,
         activeRun: null,
+        runHistory: [],
+        isExecuting: false,
+        selectedTraceEventIndex: null,
+        runInputModalOpen: false,
         inspectorMode: 'overview',
         saveStatus: 'unsaved',
       }));
@@ -813,11 +888,21 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
           await defaultPersistenceAdapter.saveWorkspaceMeta({
             activeWorkflowId: seed.id,
           });
+          let seedRuns: WorkflowRunRecord[] = [];
+          try {
+            seedRuns = await defaultPersistenceAdapter.listRuns(seed.id);
+          } catch {
+            seedRuns = [];
+          }
           set({
             workflow: seed,
             validationReport: validateWorkflow(seed),
             savedWorkflows: [seed],
             customTemplates,
+            activeRun: null,
+            runHistory: mergeAndDeduplicateRuns(seedRuns, seed.id),
+            isExecuting: activeRunControllers.has(seed.id),
+            selectedTraceEventIndex: null,
             onboardingDismissed: Boolean(meta.onboardingDismissed),
             saveStatus: 'saved',
             storageError: null,
@@ -826,11 +911,24 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
           return;
         }
 
+        let persistedRuns: WorkflowRunRecord[] = [];
+        try {
+          persistedRuns = await defaultPersistenceAdapter.listRuns(
+            activeDoc.id,
+          );
+        } catch {
+          persistedRuns = [];
+        }
+
         set({
           workflow: structuredClone(activeDoc),
           validationReport: validateWorkflow(activeDoc),
           savedWorkflows: workflows,
           customTemplates,
+          activeRun: null,
+          runHistory: mergeAndDeduplicateRuns(persistedRuns, activeDoc.id),
+          isExecuting: activeRunControllers.has(activeDoc.id),
+          selectedTraceEventIndex: null,
           onboardingDismissed: Boolean(meta.onboardingDismissed),
           saveStatus: 'saved',
           storageError: null,
@@ -972,6 +1070,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         selectedNodeIds: [],
         selectedEdgeId: null,
         activeRun: null,
+        runHistory: [],
+        isExecuting: false,
+        selectedTraceEventIndex: null,
+        runInputModalOpen: false,
         inspectorMode: 'overview',
         saveStatus: 'saved',
         storageError: null,
@@ -1145,15 +1247,199 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       set({ mobileActiveTab: tab });
     },
 
-    setActiveRun: (run) => {
+    setRunInputModalOpen: (open) => {
+      set({ runInputModalOpen: open });
+    },
+
+    executeCurrentWorkflow: async (inputOverride, options = {}) => {
+      const workflowSnapshot = structuredClone(get().workflow);
+      const targetWorkflowId = workflowSnapshot.id;
+
+      // Prevent duplicate concurrent runs for the same workflow
+      if (activeRunControllers.has(targetWorkflowId)) {
+        get().addToast('Workflow is already running.', 'warning');
+        return null;
+      }
+
+      const controller = new AbortController();
+      activeRunControllers.set(targetWorkflowId, controller);
+
       set({
-        activeRun: run,
-        inspectorMode: run
-          ? run.status === 'failed'
+        isExecuting: true,
+        runInputModalOpen: false,
+        selectedTraceEventIndex: null,
+      });
+
+      try {
+        const finalRun = await executeWorkflow(workflowSnapshot, {
+          ...options,
+          input: inputOverride,
+          signal: controller.signal,
+          onEvent: (_event, snapshot) => {
+            // Only update activeRun if the user has not switched away from targetWorkflowId
+            if (get().workflow.id === targetWorkflowId) {
+              set({
+                activeRun: structuredClone(snapshot),
+              });
+            }
+          },
+        });
+
+        activeRunControllers.delete(targetWorkflowId);
+        const completedRecord = structuredClone(finalRun);
+
+        // Apply state updates only if the executed workflow is still the active workflow
+        if (get().workflow.id === targetWorkflowId) {
+          const updatedHistory = mergeAndDeduplicateRuns(
+            [completedRecord, ...get().runHistory],
+            targetWorkflowId,
+          );
+          const failedNodeId =
+            completedRecord.status === 'failed' &&
+            completedRecord.error?.nodeId &&
+            get().workflow.nodes.some(
+              (n) => n.id === completedRecord.error?.nodeId,
+            )
+              ? completedRecord.error.nodeId
+              : null;
+
+          set((s) => ({
+            activeRun: completedRecord,
+            runHistory: updatedHistory,
+            isExecuting: activeRunControllers.has(s.workflow.id),
+            bottomDrawerOpen: true,
+            bottomDrawerTab:
+              completedRecord.status === 'failed' ? 'timeline' : 'output',
+            rightInspectorCollapsed:
+              completedRecord.status === 'failed'
+                ? false
+                : s.rightInspectorCollapsed,
+            inspectorMode:
+              completedRecord.status === 'failed'
+                ? 'error'
+                : s.selectedNodeId
+                  ? 'node'
+                  : 'run',
+            selectedNodeId: failedNodeId ?? s.selectedNodeId,
+            selectedNodeIds: failedNodeId ? [failedNodeId] : s.selectedNodeIds,
+          }));
+
+          if (completedRecord.status === 'success') {
+            get().addToast(
+              `Workflow completed in ${completedRecord.durationMs ?? 0}ms.`,
+              'neutral',
+            );
+          } else if (completedRecord.status === 'failed') {
+            get().addToast(
+              `Workflow failed: ${completedRecord.error?.message ?? 'Execution error'}`,
+              'error',
+            );
+          } else if (completedRecord.status === 'cancelled') {
+            get().addToast('Workflow execution cancelled.', 'warning');
+          }
+        } else {
+          // User switched workflows during execution; keep current workflow state untouched
+          set((s) => ({
+            isExecuting: activeRunControllers.has(s.workflow.id),
+          }));
+        }
+
+        // Persist finalized run (completed, failed, or cancelled) to IndexedDB
+        try {
+          await defaultPersistenceAdapter.saveRun(completedRecord);
+          const persistedRuns =
+            await defaultPersistenceAdapter.listRuns(targetWorkflowId);
+          if (get().workflow.id === targetWorkflowId) {
+            set((s) => ({
+              runHistory: mergeAndDeduplicateRuns(
+                [completedRecord, ...persistedRuns, ...s.runHistory],
+                targetWorkflowId,
+              ),
+            }));
+          }
+        } catch (storageErr) {
+          const msg =
+            storageErr instanceof Error
+              ? storageErr.message
+              : 'Failed to persist workflow run to IndexedDB';
+          set({ storageError: msg });
+          get().addToast(msg, 'error');
+        }
+
+        return completedRecord;
+      } catch (unexpectedErr) {
+        activeRunControllers.delete(targetWorkflowId);
+        const msg =
+          unexpectedErr instanceof Error
+            ? unexpectedErr.message
+            : 'Unexpected workflow execution error';
+        if (get().workflow.id === targetWorkflowId) {
+          set({
+            isExecuting: false,
+          });
+        }
+        get().addToast(msg, 'error');
+        return null;
+      }
+    },
+
+    cancelActiveRun: () => {
+      const currentWorkflowId = get().workflow.id;
+      const controller = activeRunControllers.get(currentWorkflowId);
+      if (controller && !controller.signal.aborted) {
+        controller.abort();
+      }
+    },
+
+    clearActiveRun: () => {
+      set((s) => ({
+        activeRun: null,
+        selectedTraceEventIndex: null,
+        inspectorMode: s.selectedNodeId ? 'node' : 'overview',
+      }));
+    },
+
+    setActiveRun: (run) => {
+      const cloned = run ? structuredClone(run) : null;
+      set((s) => ({
+        activeRun: cloned,
+        selectedTraceEventIndex: null,
+        inspectorMode: cloned
+          ? cloned.status === 'failed'
             ? 'error'
             : 'run'
-          : 'overview',
-      });
+          : s.selectedNodeId
+            ? 'node'
+            : 'overview',
+      }));
+    },
+
+    setSelectedTraceEventIndex: (index) => {
+      set({ selectedTraceEventIndex: index });
+    },
+
+    loadRunHistory: async (workflowId) => {
+      const targetId = workflowId ?? get().workflow.id;
+      try {
+        const persisted = await defaultPersistenceAdapter.listRuns(targetId);
+        const deduplicated = mergeAndDeduplicateRuns(persisted, targetId);
+        if (get().workflow.id === targetId) {
+          set((s) => ({
+            runHistory: mergeAndDeduplicateRuns(
+              [...s.runHistory, ...deduplicated],
+              targetId,
+            ),
+          }));
+        }
+        return deduplicated;
+      } catch (err) {
+        const msg =
+          err instanceof Error
+            ? err.message
+            : 'Failed to load workflow run history from IndexedDB';
+        set({ storageError: msg });
+        return get().workflow.id === targetId ? get().runHistory : [];
+      }
     },
 
     addToast: (message, tone = 'neutral') => {

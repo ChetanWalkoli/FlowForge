@@ -66,7 +66,17 @@ const InnerWorkflowCanvas: React.FC = () => {
       const outgoingCount = workflow.edges.filter(
         (e) => e.source === node.id,
       ).length;
-      const executionStatus = activeRun?.nodeTraces[node.id]?.status;
+      const nodeTrace = activeRun?.nodeTraces[node.id];
+      const executionStatus = nodeTrace?.status;
+      const conditionSelectedBranch: 'true' | 'false' | undefined =
+        nodeTrace?.selectedHandleId === 'true' ||
+        nodeTrace?.selectedHandleId === 'false'
+          ? nodeTrace.selectedHandleId
+          : nodeTrace?.conditionReason
+            ? nodeTrace.conditionReason.result
+              ? 'true'
+              : 'false'
+            : undefined;
 
       return {
         id: node.id,
@@ -84,6 +94,10 @@ const InnerWorkflowCanvas: React.FC = () => {
           hasValidationError,
           hasValidationWarning,
           executionStatus,
+          executionDurationMs: nodeTrace?.durationMs,
+          executionError: nodeTrace?.error?.message,
+          executionSkipReason: nodeTrace?.skipReason,
+          conditionSelectedBranch,
           outgoingCount,
         },
       };
@@ -98,21 +112,59 @@ const InnerWorkflowCanvas: React.FC = () => {
 
   const rfEdges: Edge<FlowForgeEdgeData>[] = useMemo(() => {
     const traversedSet = new Set(activeRun?.traversedEdgeIds ?? []);
-    return workflow.edges.map((edge) => ({
-      id: edge.id,
-      source: edge.source,
-      sourceHandle: edge.sourceHandle,
-      target: edge.target,
-      targetHandle: edge.targetHandle,
-      type: 'flowforgeEdge',
-      selected: edge.id === selectedEdgeId,
-      data: {
-        isSelected: edge.id === selectedEdgeId,
-        isTraversed: traversedSet.has(edge.id),
-        label: edge.label,
-      },
-    }));
-  }, [activeRun?.traversedEdgeIds, selectedEdgeId, workflow.edges]);
+    return workflow.edges.map((edge) => {
+      const isTraversed = Boolean(activeRun && traversedSet.has(edge.id));
+      const sourceTrace = activeRun?.nodeTraces[edge.source];
+      const targetTrace = activeRun?.nodeTraces[edge.target];
+
+      const isFailed = Boolean(
+        activeRun &&
+          ((isTraversed && targetTrace?.status === 'failed') ||
+            sourceTrace?.status === 'failed'),
+      );
+
+      const selectedBranch =
+        sourceTrace?.selectedHandleId ??
+        (sourceTrace?.conditionReason
+          ? sourceTrace.conditionReason.result
+            ? 'true'
+            : 'false'
+          : undefined);
+
+      const isNonSelectedConditionBranch = Boolean(
+        selectedBranch &&
+          edge.sourceHandle &&
+          edge.sourceHandle !== selectedBranch,
+      );
+
+      const isSkipped = Boolean(
+        activeRun &&
+          !isTraversed &&
+          !isFailed &&
+          (sourceTrace?.status === 'skipped' ||
+            targetTrace?.status === 'skipped' ||
+            isNonSelectedConditionBranch),
+      );
+
+      return {
+        id: edge.id,
+        source: edge.source,
+        sourceHandle: edge.sourceHandle,
+        target: edge.target,
+        targetHandle: edge.targetHandle,
+        type: 'flowforgeEdge',
+        selected: edge.id === selectedEdgeId,
+        data: {
+          isSelected: edge.id === selectedEdgeId,
+          isTraversed,
+          isSkipped,
+          isFailed,
+          hasActiveRun: Boolean(activeRun),
+          label: edge.label,
+        },
+      };
+    });
+  }, [activeRun, selectedEdgeId, workflow.edges]);
 
   const handleConnect = useCallback(
     (connection: Connection) => {
@@ -246,6 +298,45 @@ const InnerWorkflowCanvas: React.FC = () => {
               />
             )}
           </ReactFlow>
+
+          <ul
+            aria-label="Workflow connections on canvas"
+            style={{
+              position: 'absolute',
+              width: '1px',
+              height: '1px',
+              padding: 0,
+              margin: '-1px',
+              overflow: 'hidden',
+              clip: 'rect(0, 0, 0, 0)',
+              whiteSpace: 'nowrap',
+              border: 0,
+            }}
+          >
+            {rfEdges.map((edge) => {
+              const state = edge.data?.isFailed
+                ? 'failed'
+                : edge.data?.isTraversed
+                  ? 'traversed'
+                  : edge.data?.isSkipped
+                    ? 'skipped'
+                    : 'idle';
+              return (
+                <li
+                  key={edge.id}
+                  data-edge-id={edge.id}
+                  data-edge-state={state}
+                >
+                  <button
+                    type="button"
+                    onClick={() => selectEdge(edge.id)}
+                  >
+                    Connection {edge.id}: {edge.source} → {edge.target} ({state})
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
 
           <CanvasControls
             zoomPercent={zoomPercent}

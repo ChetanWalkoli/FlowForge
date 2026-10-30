@@ -10,6 +10,7 @@ import {
   PanelBottom,
   PanelLeft,
   PanelRight,
+  Play,
   Plus,
   Redo2,
   Save,
@@ -30,6 +31,7 @@ export interface CommandItem {
   category: string;
   shortcut?: string;
   icon: React.ReactNode;
+  disabled?: boolean;
   action: () => void;
 }
 
@@ -51,6 +53,8 @@ export const CommandPalette: React.FC = () => {
   const createBlankWorkflow = useWorkspaceStore((s) => s.createBlankWorkflow);
   const saveCurrentWorkflow = useWorkspaceStore((s) => s.saveCurrentWorkflow);
   const setImportModalOpen = useWorkspaceStore((s) => s.setImportModalOpen);
+  const setRunInputModalOpen = useWorkspaceStore((s) => s.setRunInputModalOpen);
+  const isExecuting = useWorkspaceStore((s) => s.isExecuting);
   const workflow = useWorkspaceStore((s) => s.workflow);
   const addToast = useWorkspaceStore((s) => s.addToast);
 
@@ -168,6 +172,31 @@ export const CommandPalette: React.FC = () => {
         },
       },
       {
+        id: 'cmd_run_workflow',
+        label: isExecuting
+          ? 'Run workflow (Currently running...)'
+          : 'Run workflow...',
+        category: 'Workflow',
+        shortcut: 'Ctrl+Enter',
+        icon: <Play size={14} aria-hidden="true" />,
+        disabled: isExecuting,
+        action: () => {
+          if (isExecuting) {
+            addToast('Workflow is already running.', 'warning');
+            return;
+          }
+          const report = runStaticValidation();
+          if (!report.canExecute) {
+            addToast(
+              `Cannot execute: resolve ${report.errorsCount} validation error(s) first.`,
+              'error',
+            );
+            return;
+          }
+          setRunInputModalOpen(true);
+        },
+      },
+      {
         id: 'cmd_validate',
         label: 'Validate workflow',
         category: 'Workflow',
@@ -226,12 +255,14 @@ export const CommandPalette: React.FC = () => {
     copySelection,
     createBlankWorkflow,
     duplicateNodes,
+    isExecuting,
     loadWorkflow,
     pasteClipboard,
     redo,
     runStaticValidation,
     saveCurrentWorkflow,
     setImportModalOpen,
+    setRunInputModalOpen,
     toggleBottomDrawer,
     toggleLeftSidebar,
     toggleRightInspector,
@@ -358,6 +389,8 @@ export const CommandPalette: React.FC = () => {
                 type="button"
                 role="option"
                 aria-selected={idx === activeIndex}
+                aria-disabled={Boolean(cmd.disabled)}
+                disabled={Boolean(cmd.disabled)}
                 className={`ff-command-palette__item ${
                   idx === activeIndex ? 'ff-command-palette__item--active' : ''
                 }`.trim()}

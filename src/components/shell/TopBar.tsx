@@ -15,6 +15,7 @@ import {
   Redo2,
   RotateCcw,
   Save,
+  Square,
   Undo2,
 } from 'lucide-react';
 import { EXPENSE_APPROVAL_WORKFLOW } from '../../domain/fixtures/expense-approval';
@@ -33,6 +34,7 @@ export const TopBar: React.FC = () => {
     (s) => s.rightInspectorCollapsed,
   );
   const bottomDrawerOpen = useWorkspaceStore((s) => s.bottomDrawerOpen);
+  const isExecuting = useWorkspaceStore((s) => s.isExecuting);
 
   const renameWorkflow = useWorkspaceStore((s) => s.renameWorkflow);
   const undo = useWorkspaceStore((s) => s.undo);
@@ -49,6 +51,8 @@ export const TopBar: React.FC = () => {
   const saveCurrentWorkflow = useWorkspaceStore((s) => s.saveCurrentWorkflow);
   const saveAsCustomTemplate = useWorkspaceStore((s) => s.saveAsCustomTemplate);
   const setImportModalOpen = useWorkspaceStore((s) => s.setImportModalOpen);
+  const setRunInputModalOpen = useWorkspaceStore((s) => s.setRunInputModalOpen);
+  const cancelActiveRun = useWorkspaceStore((s) => s.cancelActiveRun);
   const addToast = useWorkspaceStore((s) => s.addToast);
 
   const [isEditingName, setIsEditingName] = useState(false);
@@ -110,6 +114,10 @@ export const TopBar: React.FC = () => {
   };
 
   const handleRunClick = () => {
+    if (isExecuting) {
+      addToast('Workflow is already running.', 'warning');
+      return;
+    }
     const report = runStaticValidation();
     if (!report.canExecute) {
       addToast(
@@ -118,10 +126,7 @@ export const TopBar: React.FC = () => {
       );
       return;
     }
-    addToast(
-      `Workflow "${workflow.name}" validated and queued for execution.`,
-      'neutral',
-    );
+    setRunInputModalOpen(true);
   };
 
   const handleSaveClick = async () => {
@@ -278,10 +283,23 @@ export const TopBar: React.FC = () => {
           )}
         </Button>
 
+        {isExecuting && (
+          <Button
+            variant="destructive"
+            size="sm"
+            leftIcon={<Square size={13} />}
+            aria-label="Cancel active run"
+            onClick={cancelActiveRun}
+          >
+            Cancel Run
+          </Button>
+        )}
+
         <Button
           variant="primary"
           size="sm"
           leftIcon={<Play size={14} />}
+          disabled={isExecuting}
           onClick={handleRunClick}
         >
           Run

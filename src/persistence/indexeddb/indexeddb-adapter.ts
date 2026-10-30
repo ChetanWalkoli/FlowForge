@@ -148,10 +148,42 @@ export class LocalIndexedDBAdapter implements PersistenceAdapter {
     const all = workflowId
       ? await db.getAllFromIndex('runs', 'by-workflow', workflowId)
       : await db.getAll('runs');
-    return all.sort((a, b) => b.startedAt - a.startedAt);
+
+    const deduplicated = new Map<string, WorkflowRunRecord>();
+    for (const item of all) {
+      if (
+        item &&
+        typeof item === 'object' &&
+        typeof item.runId === 'string' &&
+        item.runId.length > 0 &&
+        typeof item.workflowId === 'string' &&
+        item.workflowId.length > 0 &&
+        typeof item.startedAt === 'number'
+      ) {
+        if (!workflowId || item.workflowId === workflowId) {
+          deduplicated.set(item.runId, structuredClone(item));
+        }
+      }
+    }
+
+    return Array.from(deduplicated.values()).sort((a, b) => {
+      if (b.startedAt !== a.startedAt) {
+        return b.startedAt - a.startedAt;
+      }
+      return b.runId.localeCompare(a.runId);
+    });
   }
 
   async saveRun(run: WorkflowRunRecord): Promise<void> {
+    if (
+      !run ||
+      typeof run.runId !== 'string' ||
+      run.runId.trim().length === 0 ||
+      typeof run.workflowId !== 'string' ||
+      run.workflowId.trim().length === 0
+    ) {
+      throw new Error('Cannot persist invalid workflow run record: missing runId or workflowId.');
+    }
     const db = await this.getDb();
     await db.put('runs', structuredClone(run));
   }

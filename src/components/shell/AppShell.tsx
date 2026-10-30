@@ -8,6 +8,7 @@ import { CommandPalette } from './CommandPalette';
 import { ImportWorkflowModal } from './ImportWorkflowModal';
 import { NavigationSidebar } from './NavigationSidebar';
 import { OnboardingBanner } from './OnboardingBanner';
+import { RunWorkflowModal } from './RunWorkflowModal';
 import { TopBar } from './TopBar';
 
 export const AppShell: React.FC = () => {
@@ -188,6 +189,7 @@ export const AppShell: React.FC = () => {
 
       <CommandPalette />
       <ImportWorkflowModal />
+      <RunWorkflowModal />
       <ToastRegion toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
