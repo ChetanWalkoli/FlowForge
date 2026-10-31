@@ -8,6 +8,7 @@ import {
   Repeat,
   RotateCw,
   Shuffle,
+  Workflow,
   Zap,
 } from 'lucide-react';
 import type { NodeType } from '../../domain/types/workflow';
@@ -42,6 +43,8 @@ export const NodeCategoryIcon: React.FC<NodeCategoryIconProps> = ({
       return <Repeat size={size} className={className} aria-hidden="true" />;
     case 'merge':
       return <GitMerge size={size} className={className} aria-hidden="true" />;
+    case 'subflow':
+      return <Workflow size={size} className={className} aria-hidden="true" />;
   }
 };
 

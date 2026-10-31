@@ -15,6 +15,7 @@ import type {
   ValidationReport,
   WorkflowDocument,
   WorkflowEdge,
+  WorkflowLifecycleStatus,
   WorkflowNode,
   WorkflowRunRecord,
 } from '../domain/types/workflow';
@@ -23,10 +24,25 @@ import {
   validateConnection,
   validateWorkflow,
 } from '../domain/validation/graph-validator';
+import { autoLayoutWorkflow } from '../domain/graph/auto-layout';
+import {
+  buildRestoredWorkflowRevision,
+  createWorkflowRevisionRecord,
+  type WorkflowRevisionRecord,
+} from '../domain/versioning/version-diff';
 import {
   executeWorkflow,
+  ExecutionPauseController,
   type ExecuteWorkflowOptions,
 } from '../engine';
+import {
+  getDefaultTestCasesForWorkflow,
+  runSingleWorkflowTestCase,
+  runWorkflowTestSuite,
+  type WorkflowTestCase,
+  type WorkflowTestCaseResult,
+  type WorkflowTestSuiteReport,
+} from '../features/testing-lab/testing-lab';
 import { defaultPersistenceAdapter } from '../persistence/indexeddb/indexeddb-adapter';
 import { serializeWorkflowForExport } from '../persistence/import-export';
 import type { ToastMessage } from '../components/ui/ToastRegion';
@@ -59,6 +75,7 @@ export interface WorkspaceState {
   onboardingDismissed: boolean;
   importModalOpen: boolean;
   runInputModalOpen: boolean;
+  generateWorkflowModalOpen: boolean;
 
   // Bounded Undo / Redo stacks (FR-007)
   undoStack: WorkflowDocument[];
@@ -70,11 +87,20 @@ export interface WorkspaceState {
   selectedEdgeId: string | null;
   clipboard: ClipboardSlice | null;
 
-  // Run & debugger context (FR-025 through FR-042)
+  // Run & debugger context (FR-025 through FR-045)
   activeRun: WorkflowRunRecord | null;
   runHistory: WorkflowRunRecord[];
   isExecuting: boolean;
   selectedTraceEventIndex: number | null;
+  comparisonRunId: string | null;
+
+  // Testing Lab & Coverage state (FR-046 through FR-051)
+  testCases: WorkflowTestCase[];
+  testSuiteReport: WorkflowTestSuiteReport | null;
+  isRunningTests: boolean;
+
+  // Immutable Versioning & Snapshots (FR-056 through FR-058)
+  revisions: WorkflowRevisionRecord[];
 
   // Layout & panel visibility (DESIGN.md §3 & §8)
   leftSidebarCollapsed: boolean;
@@ -114,6 +140,7 @@ export interface WorkspaceState {
   ) => void;
   removeNode: (nodeId: string) => void;
   removeSelectedElements: () => void;
+  autoArrangeNodes: () => void;
 
   // Actions — Edges & Connections
   connectNodes: (connection: {
@@ -144,6 +171,8 @@ export interface WorkspaceState {
   dismissOnboarding: () => Promise<void>;
   restoreOnboarding: () => Promise<void>;
   setImportModalOpen: (open: boolean) => void;
+  setGenerateWorkflowModalOpen: (open: boolean) => void;
+  applyDraftWorkflow: (draft: WorkflowDocument, mode?: 'replace' | 'insert') => void;
 
   // Actions — Selection & Focus
   selectNode: (nodeId: string | null, multi?: boolean) => void;
@@ -170,17 +199,33 @@ export interface WorkspaceState {
 
   setMobileActiveTab: (tab: MobileWorkspaceTab) => void;
 
-  // Actions — Run state & runtime execution (FR-025 through FR-042)
+  // Actions — Run state, TraceLab Replay & Run Comparison (FR-025 through FR-045)
   setRunInputModalOpen: (open: boolean) => void;
   executeCurrentWorkflow: (
     inputOverride?: Record<string, unknown>,
     options?: Omit<ExecuteWorkflowOptions, 'input' | 'signal' | 'onEvent'>,
   ) => Promise<WorkflowRunRecord | null>;
   cancelActiveRun: () => void;
+  pauseActiveRun: () => void;
+  resumeActiveRun: () => void;
   clearActiveRun: () => void;
   setActiveRun: (run: WorkflowRunRecord | null) => void;
   setSelectedTraceEventIndex: (index: number | null) => void;
+  stepTraceReplay: (direction: 'first' | 'prev' | 'next' | 'last') => void;
+  setComparisonRunId: (runId: string | null) => void;
   loadRunHistory: (workflowId?: string) => Promise<WorkflowRunRecord[]>;
+
+  // Actions — Testing Lab (FR-046 through FR-051)
+  addTestCase: (testCase: Omit<WorkflowTestCase, 'id' | 'workflowId' | 'createdAt' | 'updatedAt'> & { id?: string }) => WorkflowTestCase;
+  updateTestCase: (testCaseId: string, patch: Partial<Omit<WorkflowTestCase, 'id' | 'workflowId'>>) => void;
+  deleteTestCase: (testCaseId: string) => void;
+  resetDefaultTestCases: () => void;
+  runSingleTest: (testCaseId: string) => Promise<WorkflowTestCaseResult | null>;
+  runTestSuite: () => Promise<WorkflowTestSuiteReport>;
+
+  // Actions — Immutable Revisions & Diffs (FR-056 through FR-058)
+  saveRevisionCheckpoint: (note?: string, status?: WorkflowLifecycleStatus) => WorkflowRevisionRecord;
+  restoreRevision: (revisionId: string) => WorkflowDocument | null;
 
   // Actions — Toasts
   addToast: (message: string, tone?: ToastMessage['tone']) => void;
@@ -191,12 +236,18 @@ let nodeCounter = 100;
 let edgeCounter = 100;
 let toastCounter = 1;
 let workflowCounter = 1;
+let testCaseCounter = 100;
+
+interface ActiveRunHandle {
+  abortController: AbortController;
+  pauseController: ExecutionPauseController;
+}
 
 /**
- * Tracks active AbortControllers keyed by workflowId so each workflow can have at most
- * one active execution at a time, and cancellation state is strictly scoped per run.
+ * Tracks active AbortControllers and ExecutionPauseControllers keyed by workflowId so each workflow
+ * can have at most one active execution at a time, and cancellation/pause state is strictly scoped per run.
  */
-const activeRunControllers = new Map<string, AbortController>();
+const activeRunControllers = new Map<string, ActiveRunHandle>();
 
 function createInitialWorkflow(): WorkflowDocument {
   return structuredClone(EXPENSE_APPROVAL_WORKFLOW);
@@ -240,9 +291,29 @@ function mergeAndDeduplicateRuns(
   });
 }
 
+function persistCurrentTestSuite(
+  workflowId: string,
+  testCases: WorkflowTestCase[],
+  lastReport: WorkflowTestSuiteReport | null,
+): void {
+  void defaultPersistenceAdapter
+    .saveTestSuite({
+      workflowId,
+      testCases: structuredClone(testCases),
+      lastReport: lastReport ? structuredClone(lastReport) : null,
+      updatedAt: new Date().toISOString(),
+    })
+    .catch(() => {
+      // Non-fatal persistence error
+    });
+}
+
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
   const initialDoc = createInitialWorkflow();
   const initialValidation = validateWorkflow(initialDoc);
+  const initialRevisionRecord = createWorkflowRevisionRecord(initialDoc, {
+    note: 'Initial workflow baseline',
+  });
 
   return {
     workflow: initialDoc,
@@ -257,6 +328,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
     onboardingDismissed: false,
     importModalOpen: false,
     runInputModalOpen: false,
+    generateWorkflowModalOpen: false,
 
     undoStack: [],
     redoStack: [],
@@ -270,6 +342,13 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
     runHistory: [],
     isExecuting: false,
     selectedTraceEventIndex: null,
+    comparisonRunId: null,
+
+    testCases: getDefaultTestCasesForWorkflow(initialDoc),
+    testSuiteReport: null,
+    isRunningTests: false,
+
+    revisions: [initialRevisionRecord],
 
     leftSidebarCollapsed: false,
     leftSidebarTab: 'nodes',
@@ -289,6 +368,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
     loadWorkflow: (doc) => {
       const cloned = structuredClone(doc);
       const report = validateWorkflow(cloned);
+      const baselineRev = createWorkflowRevisionRecord(cloned, {
+        note: `Loaded workflow v${cloned.revision}`,
+      });
       set({
         workflow: cloned,
         validationReport: report,
@@ -301,6 +383,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         runHistory: [],
         isExecuting: activeRunControllers.has(cloned.id),
         selectedTraceEventIndex: null,
+        comparisonRunId: null,
+        testCases: getDefaultTestCasesForWorkflow(cloned),
+        testSuiteReport: null,
+        isRunningTests: false,
+        revisions: [baselineRev],
         runInputModalOpen: false,
         inspectorMode: 'overview',
         saveStatus: 'saved',
@@ -311,21 +398,28 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         .catch(() => {
           // Non-fatal metadata update
         });
-      void defaultPersistenceAdapter
-        .listRuns(cloned.id)
-        .then((runs) => {
-          if (get().workflow.id === cloned.id) {
-            set((s) => ({
-              runHistory: mergeAndDeduplicateRuns(
-                [...s.runHistory, ...runs],
-                cloned.id,
-              ),
-            }));
-          }
-        })
-        .catch(() => {
-          // Non-fatal run history load
-        });
+      void Promise.all([
+        defaultPersistenceAdapter.listRuns(cloned.id).catch(() => []),
+        defaultPersistenceAdapter.listRevisions(cloned.id).catch(() => []),
+        defaultPersistenceAdapter.getTestSuite(cloned.id).catch(() => null),
+      ]).then(([runs, revs, suite]) => {
+        if (get().workflow.id === cloned.id) {
+          set((s) => ({
+            runHistory: mergeAndDeduplicateRuns(
+              [...s.runHistory, ...runs],
+              cloned.id,
+            ),
+            revisions:
+              revs && revs.length > 0 ? revs : s.revisions,
+            testCases:
+              suite && suite.testCases && suite.testCases.length > 0
+                ? suite.testCases
+                : s.testCases,
+            testSuiteReport:
+              suite && suite.lastReport ? suite.lastReport : s.testSuiteReport,
+          }));
+        }
+      });
     },
 
     createBlankWorkflow: () => {
@@ -344,6 +438,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         updatedAt: now,
       };
       const report = validateWorkflow(blankDoc);
+      const baselineRev = createWorkflowRevisionRecord(blankDoc, {
+        note: 'Initial draft',
+      });
       set((s) => ({
         undoStack: pushUndoSnapshot(s.undoStack, s.workflow),
         redoStack: [],
@@ -356,6 +453,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         runHistory: [],
         isExecuting: false,
         selectedTraceEventIndex: null,
+        comparisonRunId: null,
+        testCases: [],
+        testSuiteReport: null,
+        isRunningTests: false,
+        revisions: [baselineRev],
         runInputModalOpen: false,
         inspectorMode: 'overview',
         saveStatus: 'unsaved',
@@ -580,6 +682,21 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         inspectorMode: 'overview',
         saveStatus: 'unsaved',
       }));
+    },
+
+    autoArrangeNodes: () => {
+      const current = get().workflow;
+      if (current.nodes.length === 0) return;
+
+      const arranged = autoLayoutWorkflow(current);
+      set((s) => ({
+        undoStack: pushUndoSnapshot(s.undoStack, s.workflow),
+        redoStack: [],
+        workflow: arranged,
+        validationReport: validateWorkflow(arranged),
+        saveStatus: 'unsaved',
+      }));
+      get().addToast('Auto-arranged workflow graph.', 'neutral');
     },
 
     connectNodes: (connection) => {
@@ -888,12 +1005,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
           await defaultPersistenceAdapter.saveWorkspaceMeta({
             activeWorkflowId: seed.id,
           });
-          let seedRuns: WorkflowRunRecord[] = [];
-          try {
-            seedRuns = await defaultPersistenceAdapter.listRuns(seed.id);
-          } catch {
-            seedRuns = [];
-          }
+          const [seedRuns, seedRevs, seedSuite] = await Promise.all([
+            defaultPersistenceAdapter.listRuns(seed.id).catch(() => []),
+            defaultPersistenceAdapter.listRevisions(seed.id).catch(() => []),
+            defaultPersistenceAdapter.getTestSuite(seed.id).catch(() => null),
+          ]);
           set({
             workflow: seed,
             validationReport: validateWorkflow(seed),
@@ -903,6 +1019,21 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
             runHistory: mergeAndDeduplicateRuns(seedRuns, seed.id),
             isExecuting: activeRunControllers.has(seed.id),
             selectedTraceEventIndex: null,
+            comparisonRunId: null,
+            testCases:
+              seedSuite && seedSuite.testCases.length > 0
+                ? seedSuite.testCases
+                : getDefaultTestCasesForWorkflow(seed),
+            testSuiteReport: seedSuite ? seedSuite.lastReport : null,
+            isRunningTests: false,
+            revisions:
+              seedRevs.length > 0
+                ? seedRevs
+                : [
+                    createWorkflowRevisionRecord(seed, {
+                      note: 'Seeded workflow baseline',
+                    }),
+                  ],
             onboardingDismissed: Boolean(meta.onboardingDismissed),
             saveStatus: 'saved',
             storageError: null,
@@ -911,14 +1042,18 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
           return;
         }
 
-        let persistedRuns: WorkflowRunRecord[] = [];
-        try {
-          persistedRuns = await defaultPersistenceAdapter.listRuns(
-            activeDoc.id,
-          );
-        } catch {
-          persistedRuns = [];
-        }
+        const [persistedRuns, persistedRevs, persistedSuite] =
+          await Promise.all([
+            defaultPersistenceAdapter
+              .listRuns(activeDoc.id)
+              .catch(() => []),
+            defaultPersistenceAdapter
+              .listRevisions(activeDoc.id)
+              .catch(() => []),
+            defaultPersistenceAdapter
+              .getTestSuite(activeDoc.id)
+              .catch(() => null),
+          ]);
 
         set({
           workflow: structuredClone(activeDoc),
@@ -929,6 +1064,21 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
           runHistory: mergeAndDeduplicateRuns(persistedRuns, activeDoc.id),
           isExecuting: activeRunControllers.has(activeDoc.id),
           selectedTraceEventIndex: null,
+          comparisonRunId: null,
+          testCases:
+            persistedSuite && persistedSuite.testCases.length > 0
+              ? persistedSuite.testCases
+              : getDefaultTestCasesForWorkflow(activeDoc),
+          testSuiteReport: persistedSuite ? persistedSuite.lastReport : null,
+          isRunningTests: false,
+          revisions:
+            persistedRevs.length > 0
+              ? persistedRevs
+              : [
+                  createWorkflowRevisionRecord(activeDoc, {
+                    note: `Loaded workflow v${activeDoc.revision}`,
+                  }),
+                ],
           onboardingDismissed: Boolean(meta.onboardingDismissed),
           saveStatus: 'saved',
           storageError: null,
@@ -1073,6 +1223,15 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         runHistory: [],
         isExecuting: false,
         selectedTraceEventIndex: null,
+        comparisonRunId: null,
+        testCases: getDefaultTestCasesForWorkflow(saved),
+        testSuiteReport: null,
+        isRunningTests: false,
+        revisions: [
+          createWorkflowRevisionRecord(saved, {
+            note: 'Imported workflow baseline',
+          }),
+        ],
         runInputModalOpen: false,
         inspectorMode: 'overview',
         saveStatus: 'saved',
@@ -1111,6 +1270,100 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
 
     setImportModalOpen: (open) => {
       set({ importModalOpen: open });
+    },
+
+    setGenerateWorkflowModalOpen: (open) => {
+      set({ generateWorkflowModalOpen: open });
+    },
+
+    applyDraftWorkflow: (draft, mode = 'replace') => {
+      const current = get().workflow;
+      if (mode === 'replace') {
+        const cloned = structuredClone(draft);
+        const report = validateWorkflow(cloned);
+        const baselineRev = createWorkflowRevisionRecord(cloned, {
+          note: `Drafted from prompt: ${cloned.name}`,
+        });
+        set((s) => ({
+          undoStack: pushUndoSnapshot(s.undoStack, s.workflow),
+          redoStack: [],
+          workflow: cloned,
+          validationReport: report,
+          selectedNodeId: cloned.nodes[0]?.id ?? null,
+          selectedNodeIds: cloned.nodes[0] ? [cloned.nodes[0].id] : [],
+          selectedEdgeId: null,
+          activeRun: null,
+          runHistory: [],
+          revisions: [baselineRev],
+          saveStatus: 'unsaved',
+          generateWorkflowModalOpen: false,
+        }));
+        void defaultPersistenceAdapter.saveWorkflow(cloned).catch(() => {});
+        void defaultPersistenceAdapter.saveRevision(baselineRev).catch(() => {});
+        return;
+      }
+
+      // Mode === 'insert': append nodes and edges to current workflow with offset & fresh IDs
+      let maxY = 0;
+      for (const n of current.nodes) {
+        if (n.position.y > maxY) maxY = n.position.y;
+      }
+      const yOffset = maxY + 240;
+
+      const idMap = new Map<string, string>();
+      const newNodes: WorkflowNode[] = draft.nodes.map((node) => {
+        const newId = `node_${++nodeCounter}`;
+        idMap.set(node.id, newId);
+        return {
+          ...structuredClone(node),
+          id: newId,
+          position: {
+            x: node.position.x,
+            y: node.position.y + yOffset,
+          },
+        };
+      });
+
+      // Update references inside node config
+      for (const node of newNodes) {
+        if (node.type === 'condition' && node.config.left?.source) {
+          if (idMap.has(node.config.left.source)) {
+            node.config.left.source = idMap.get(node.config.left.source)!;
+          }
+        } else if (node.type === 'action' && node.config.actionType === 'buildObject' && node.config.fields) {
+          for (const entry of Object.values(node.config.fields)) {
+            if (entry.kind === 'ref' && idMap.has(entry.source)) {
+              entry.source = idMap.get(entry.source)!;
+            }
+          }
+        }
+      }
+
+      const newEdges: WorkflowEdge[] = draft.edges.map((edge) => ({
+        ...structuredClone(edge),
+        id: `edge_${++edgeCounter}`,
+        source: idMap.get(edge.source) || edge.source,
+        target: idMap.get(edge.target) || edge.target,
+      }));
+
+      const merged: WorkflowDocument = {
+        ...structuredClone(current),
+        nodes: [...structuredClone(current.nodes), ...newNodes],
+        edges: [...structuredClone(current.edges), ...newEdges],
+        updatedAt: new Date().toISOString(),
+      };
+
+      set((s) => ({
+        undoStack: pushUndoSnapshot(s.undoStack, s.workflow),
+        redoStack: [],
+        workflow: merged,
+        validationReport: validateWorkflow(merged),
+        selectedNodeId: newNodes[0]?.id ?? null,
+        selectedNodeIds: newNodes.map((n) => n.id),
+        selectedEdgeId: null,
+        saveStatus: 'unsaved',
+        generateWorkflowModalOpen: false,
+      }));
     },
 
     selectNode: (nodeId, multi = false) => {
@@ -1261,8 +1514,12 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         return null;
       }
 
-      const controller = new AbortController();
-      activeRunControllers.set(targetWorkflowId, controller);
+      const abortController = new AbortController();
+      const pauseController = new ExecutionPauseController();
+      activeRunControllers.set(targetWorkflowId, {
+        abortController,
+        pauseController,
+      });
 
       set({
         isExecuting: true,
@@ -1274,7 +1531,15 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         const finalRun = await executeWorkflow(workflowSnapshot, {
           ...options,
           input: inputOverride,
-          signal: controller.signal,
+          signal: abortController.signal,
+          pauseController,
+          workflowLookup:
+            options.workflowLookup ??
+            (async (id: string) => {
+              const inMemory = get().savedWorkflows.find((w) => w.id === id);
+              if (inMemory) return inMemory;
+              return defaultPersistenceAdapter.getWorkflow(id);
+            }),
           onEvent: (_event, snapshot) => {
             // Only update activeRun if the user has not switched away from targetWorkflowId
             if (get().workflow.id === targetWorkflowId) {
@@ -1385,9 +1650,27 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
 
     cancelActiveRun: () => {
       const currentWorkflowId = get().workflow.id;
-      const controller = activeRunControllers.get(currentWorkflowId);
-      if (controller && !controller.signal.aborted) {
-        controller.abort();
+      const entry = activeRunControllers.get(currentWorkflowId);
+      if (entry && !entry.abortController.signal.aborted) {
+        entry.abortController.abort();
+      }
+    },
+
+    pauseActiveRun: () => {
+      const currentWorkflowId = get().workflow.id;
+      const entry = activeRunControllers.get(currentWorkflowId);
+      if (entry) {
+        entry.pauseController.pause();
+        get().addToast('Workflow execution paused.', 'neutral');
+      }
+    },
+
+    resumeActiveRun: () => {
+      const currentWorkflowId = get().workflow.id;
+      const entry = activeRunControllers.get(currentWorkflowId);
+      if (entry) {
+        entry.pauseController.resume();
+        get().addToast('Resumed workflow execution.', 'neutral');
       }
     },
 
@@ -1418,6 +1701,47 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       set({ selectedTraceEventIndex: index });
     },
 
+    stepTraceReplay: (direction) => {
+      const { activeRun, selectedTraceEventIndex, workflow } = get();
+      if (!activeRun || activeRun.events.length === 0) return;
+
+      const totalEvents = activeRun.events.length;
+      const currentIdx =
+        selectedTraceEventIndex === null ? totalEvents - 1 : selectedTraceEventIndex;
+
+      let nextIdx: number | null = currentIdx;
+      if (direction === 'first') {
+        nextIdx = 0;
+      } else if (direction === 'prev') {
+        nextIdx = Math.max(0, currentIdx - 1);
+      } else if (direction === 'next') {
+        nextIdx = Math.min(totalEvents - 1, currentIdx + 1);
+      } else if (direction === 'last') {
+        nextIdx = null;
+      }
+
+      const targetEvent =
+        nextIdx !== null ? activeRun.events[nextIdx] : activeRun.events[totalEvents - 1];
+      const eventNodeId =
+        targetEvent &&
+        'nodeId' in targetEvent &&
+        targetEvent.nodeId &&
+        workflow.nodes.some((n) => n.id === targetEvent.nodeId)
+          ? targetEvent.nodeId
+          : null;
+
+      set((s) => ({
+        selectedTraceEventIndex: nextIdx,
+        selectedNodeId: eventNodeId ?? s.selectedNodeId,
+        selectedNodeIds: eventNodeId ? [eventNodeId] : s.selectedNodeIds,
+        inspectorMode: eventNodeId ? 'node' : s.inspectorMode,
+      }));
+    },
+
+    setComparisonRunId: (runId) => {
+      set({ comparisonRunId: runId });
+    },
+
     loadRunHistory: async (workflowId) => {
       const targetId = workflowId ?? get().workflow.id;
       try {
@@ -1440,6 +1764,221 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         set({ storageError: msg });
         return get().workflow.id === targetId ? get().runHistory : [];
       }
+    },
+
+    addTestCase: (testCaseInput) => {
+      const now = new Date().toISOString();
+      const newCase: WorkflowTestCase = {
+        id: testCaseInput.id ?? `tc_${Date.now()}_${++testCaseCounter}`,
+        workflowId: get().workflow.id,
+        name: testCaseInput.name.trim() || 'Untitled Test Case',
+        description: testCaseInput.description,
+        input: structuredClone(testCaseInput.input),
+        assertions: structuredClone(testCaseInput.assertions),
+        createdAt: now,
+        updatedAt: now,
+      };
+      const updatedCases = [...get().testCases, newCase];
+      set({ testCases: updatedCases });
+      persistCurrentTestSuite(
+        get().workflow.id,
+        updatedCases,
+        get().testSuiteReport,
+      );
+      return newCase;
+    },
+
+    updateTestCase: (testCaseId, patch) => {
+      const now = new Date().toISOString();
+      const updatedCases = get().testCases.map((tc) =>
+        tc.id === testCaseId
+          ? {
+              ...structuredClone(tc),
+              ...structuredClone(patch),
+              updatedAt: now,
+            }
+          : tc,
+      );
+      set({ testCases: updatedCases });
+      persistCurrentTestSuite(
+        get().workflow.id,
+        updatedCases,
+        get().testSuiteReport,
+      );
+    },
+
+    deleteTestCase: (testCaseId) => {
+      const updatedCases = get().testCases.filter((tc) => tc.id !== testCaseId);
+      set({ testCases: updatedCases });
+      persistCurrentTestSuite(
+        get().workflow.id,
+        updatedCases,
+        get().testSuiteReport,
+      );
+    },
+
+    resetDefaultTestCases: () => {
+      const defaults = getDefaultTestCasesForWorkflow(get().workflow);
+      set({
+        testCases: defaults,
+        testSuiteReport: null,
+      });
+      persistCurrentTestSuite(get().workflow.id, defaults, null);
+      get().addToast('Reset test suite to starter scenarios.', 'neutral');
+    },
+
+    runSingleTest: async (testCaseId) => {
+      const tc = get().testCases.find((c) => c.id === testCaseId);
+      if (!tc) return null;
+
+      set({ isRunningTests: true });
+      try {
+        const result = await runSingleWorkflowTestCase(get().workflow, tc);
+        const existingResults = get().testSuiteReport?.results ?? [];
+        const updatedResults = existingResults.some(
+          (r: WorkflowTestCaseResult) => r.testCaseId === testCaseId,
+        )
+          ? existingResults.map((r: WorkflowTestCaseResult) =>
+              r.testCaseId === testCaseId ? result : r,
+            )
+          : [...existingResults, result];
+
+        const report = await runWorkflowTestSuite(
+          get().workflow,
+          get().testCases.filter((c) =>
+            updatedResults.some(
+              (r: WorkflowTestCaseResult) => r.testCaseId === c.id,
+            ),
+          ),
+        );
+
+        set({
+          testSuiteReport: report,
+          isRunningTests: false,
+          activeRun: structuredClone(result.runRecord),
+          selectedTraceEventIndex: null,
+        });
+        persistCurrentTestSuite(get().workflow.id, get().testCases, report);
+        return result;
+      } catch (err) {
+        set({ isRunningTests: false });
+        const msg = err instanceof Error ? err.message : 'Test execution failed';
+        get().addToast(msg, 'error');
+        return null;
+      }
+    },
+
+    runTestSuite: async () => {
+      const currentWorkflow = structuredClone(get().workflow);
+      const currentCases = structuredClone(get().testCases);
+      set({
+        isRunningTests: true,
+        bottomDrawerOpen: true,
+        bottomDrawerTab: 'tests',
+      });
+
+      try {
+        const report = await runWorkflowTestSuite(currentWorkflow, currentCases);
+        set((s) => ({
+          testSuiteReport: report,
+          isRunningTests: false,
+          workflow:
+            report.passedCases === report.totalCases && report.totalCases > 0
+              ? {
+                  ...s.workflow,
+                  status:
+                    s.workflow.status === 'published' ? 'published' : 'tested',
+                }
+              : s.workflow,
+        }));
+        persistCurrentTestSuite(currentWorkflow.id, currentCases, report);
+        get().addToast(
+          `Test Suite: ${report.passedCases}/${report.totalCases} passed (${report.coverage.coveragePercent}% branch coverage).`,
+          report.failedCases === 0 ? 'neutral' : 'warning',
+        );
+        return report;
+      } catch (err) {
+        set({ isRunningTests: false });
+        const msg =
+          err instanceof Error ? err.message : 'Test suite execution failed';
+        get().addToast(msg, 'error');
+        throw err;
+      }
+    },
+
+    saveRevisionCheckpoint: (note, status) => {
+      const current = get().workflow;
+      const highestRev = Math.max(
+        current.revision,
+        ...get().revisions.map((r) => r.revisionNumber),
+      );
+      const nextRevNumber = highestRev + 1;
+      const now = new Date().toISOString();
+
+      const updatedWorkflow: WorkflowDocument = {
+        ...structuredClone(current),
+        revision: nextRevNumber,
+        status: status ?? current.status,
+        updatedAt: now,
+      };
+
+      const record = createWorkflowRevisionRecord(updatedWorkflow, {
+        note: note?.trim() || `Revision v${nextRevNumber} checkpoint`,
+        nowIso: now,
+      });
+
+      set((s) => ({
+        workflow: updatedWorkflow,
+        revisions: [record, ...s.revisions],
+        saveStatus: 'unsaved',
+      }));
+
+      void defaultPersistenceAdapter.saveRevision(record).catch(() => {});
+
+      get().addToast(
+        `Saved immutable snapshot v${nextRevNumber}.`,
+        'neutral',
+      );
+      return record;
+    },
+
+    restoreRevision: (revisionId) => {
+      const targetRecord = get().revisions.find(
+        (r) => r.revisionId === revisionId,
+      );
+      if (!targetRecord) return null;
+
+      const highestRev = Math.max(
+        get().workflow.revision,
+        ...get().revisions.map((r) => r.revisionNumber),
+      );
+      const restoredDoc = buildRestoredWorkflowRevision(
+        targetRecord,
+        highestRev,
+      );
+      const restoredRecord = createWorkflowRevisionRecord(restoredDoc, {
+        note: `Restored from v${targetRecord.revisionNumber}`,
+      });
+
+      set((s) => ({
+        undoStack: pushUndoSnapshot(s.undoStack, s.workflow),
+        redoStack: [],
+        workflow: restoredDoc,
+        validationReport: validateWorkflow(restoredDoc),
+        revisions: [restoredRecord, ...s.revisions],
+        selectedNodeId: null,
+        selectedNodeIds: [],
+        selectedEdgeId: null,
+        saveStatus: 'unsaved',
+      }));
+
+      void defaultPersistenceAdapter.saveRevision(restoredRecord).catch(() => {});
+
+      get().addToast(
+        `Restored v${targetRecord.revisionNumber} as new revision v${restoredDoc.revision}.`,
+        'neutral',
+      );
+      return restoredDoc;
     },
 
     addToast: (message, tone = 'neutral') => {

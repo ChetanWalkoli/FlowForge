@@ -18,6 +18,11 @@ export {
 } from './context';
 
 export {
+  ExecutionPauseController,
+  type PauseControllerCallbacks,
+} from './pause-controller';
+
+export {
   createRunId,
   TraceRecorder,
   type ExecutionEventListener,
@@ -27,12 +32,19 @@ export {
 export {
   executeActionNode,
   executeConditionNode,
+  executeDelayNode,
   executeEndNode,
+  executeLoopNode,
+  executeMergeNode,
   executeNodeHandler,
+  executeRetryNode,
+  executeSubflowNode,
   executeTransformNode,
   executeTriggerNode,
   type NodeHandlerInput,
   type NodeHandlerResult,
+  type SubflowExecutor,
+  type WorkflowLookupFn,
 } from './handlers';
 
 export {

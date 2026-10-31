@@ -10,11 +10,13 @@ import {
   PanelBottom,
   PanelLeft,
   PanelRight,
+  Pause,
   Pencil,
   Play,
   Redo2,
   RotateCcw,
   Save,
+  Sparkles,
   Square,
   Undo2,
 } from 'lucide-react';
@@ -52,7 +54,13 @@ export const TopBar: React.FC = () => {
   const saveAsCustomTemplate = useWorkspaceStore((s) => s.saveAsCustomTemplate);
   const setImportModalOpen = useWorkspaceStore((s) => s.setImportModalOpen);
   const setRunInputModalOpen = useWorkspaceStore((s) => s.setRunInputModalOpen);
+  const setGenerateWorkflowModalOpen = useWorkspaceStore(
+    (s) => s.setGenerateWorkflowModalOpen,
+  );
+  const activeRun = useWorkspaceStore((s) => s.activeRun);
   const cancelActiveRun = useWorkspaceStore((s) => s.cancelActiveRun);
+  const pauseActiveRun = useWorkspaceStore((s) => s.pauseActiveRun);
+  const resumeActiveRun = useWorkspaceStore((s) => s.resumeActiveRun);
   const addToast = useWorkspaceStore((s) => s.addToast);
 
   const [isEditingName, setIsEditingName] = useState(false);
@@ -269,6 +277,17 @@ export const TopBar: React.FC = () => {
         <Button
           variant="secondary"
           size="sm"
+          leftIcon={<Sparkles size={14} />}
+          aria-label="Draft workflow with plain English"
+          title="Draft workflow with plain English"
+          onClick={() => setGenerateWorkflowModalOpen(true)}
+        >
+          Draft
+        </Button>
+
+        <Button
+          variant="secondary"
+          size="sm"
           leftIcon={<CheckCircle2 size={14} />}
           onClick={handleValidateClick}
         >
@@ -284,15 +303,38 @@ export const TopBar: React.FC = () => {
         </Button>
 
         {isExecuting && (
-          <Button
-            variant="destructive"
-            size="sm"
-            leftIcon={<Square size={13} />}
-            aria-label="Cancel active run"
-            onClick={cancelActiveRun}
-          >
-            Cancel Run
-          </Button>
+          <>
+            {activeRun?.status === 'paused' ? (
+              <Button
+                variant="secondary"
+                size="sm"
+                leftIcon={<Play size={13} />}
+                aria-label="Resume active run"
+                onClick={resumeActiveRun}
+              >
+                Resume
+              </Button>
+            ) : (
+              <Button
+                variant="secondary"
+                size="sm"
+                leftIcon={<Pause size={13} />}
+                aria-label="Pause active run"
+                onClick={pauseActiveRun}
+              >
+                Pause
+              </Button>
+            )}
+            <Button
+              variant="destructive"
+              size="sm"
+              leftIcon={<Square size={13} />}
+              aria-label="Cancel active run"
+              onClick={cancelActiveRun}
+            >
+              Cancel Run
+            </Button>
+          </>
         )}
 
         <Button

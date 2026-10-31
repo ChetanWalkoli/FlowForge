@@ -1,12 +1,15 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  BookmarkPlus,
   CheckCircle2,
   ClipboardPaste,
   Copy,
   Download,
   FilePlus2,
   FileUp,
+  FlaskConical,
   FolderKanban,
+  LayoutGrid,
   PanelBottom,
   PanelLeft,
   PanelRight,
@@ -15,6 +18,7 @@ import {
   Redo2,
   Save,
   Search,
+  Sparkles,
   Undo2,
   X,
 } from 'lucide-react';
@@ -54,6 +58,14 @@ export const CommandPalette: React.FC = () => {
   const saveCurrentWorkflow = useWorkspaceStore((s) => s.saveCurrentWorkflow);
   const setImportModalOpen = useWorkspaceStore((s) => s.setImportModalOpen);
   const setRunInputModalOpen = useWorkspaceStore((s) => s.setRunInputModalOpen);
+  const setGenerateWorkflowModalOpen = useWorkspaceStore(
+    (s) => s.setGenerateWorkflowModalOpen,
+  );
+  const autoArrangeNodes = useWorkspaceStore((s) => s.autoArrangeNodes);
+  const runTestSuite = useWorkspaceStore((s) => s.runTestSuite);
+  const saveRevisionCheckpoint = useWorkspaceStore(
+    (s) => s.saveRevisionCheckpoint,
+  );
   const isExecuting = useWorkspaceStore((s) => s.isExecuting);
   const workflow = useWorkspaceStore((s) => s.workflow);
   const addToast = useWorkspaceStore((s) => s.addToast);
@@ -64,7 +76,17 @@ export const CommandPalette: React.FC = () => {
 
   const commands: CommandItem[] = useMemo(() => {
     const mvpNodeCommands: CommandItem[] = (
-      ['trigger', 'condition', 'action', 'transform', 'end'] as NodeType[]
+      [
+        'trigger',
+        'condition',
+        'action',
+        'transform',
+        'end',
+        'delay',
+        'retry',
+        'loop',
+        'merge',
+      ] as NodeType[]
     ).map((type) => {
       const spec = NODE_REGISTRY[type];
       return {
@@ -142,6 +164,15 @@ export const CommandPalette: React.FC = () => {
         },
       },
       {
+        id: 'cmd_auto_arrange',
+        label: 'Auto-arrange workflow graph',
+        category: 'Edit',
+        icon: <LayoutGrid size={14} aria-hidden="true" />,
+        action: () => {
+          autoArrangeNodes();
+        },
+      },
+      {
         id: 'cmd_save',
         label: 'Save workflow to IndexedDB',
         category: 'Persistence',
@@ -150,6 +181,15 @@ export const CommandPalette: React.FC = () => {
         action: () => {
           void saveCurrentWorkflow();
           addToast('Workflow saved to IndexedDB.', 'neutral');
+        },
+      },
+      {
+        id: 'cmd_save_revision',
+        label: 'Save immutable revision checkpoint',
+        category: 'Persistence',
+        icon: <BookmarkPlus size={14} aria-hidden="true" />,
+        action: () => {
+          saveRevisionCheckpoint();
         },
       },
       {
@@ -169,6 +209,15 @@ export const CommandPalette: React.FC = () => {
         action: () => {
           downloadWorkflowJson(workflow);
           addToast(`Exported "${workflow.name}" as JSON.`, 'neutral');
+        },
+      },
+      {
+        id: 'cmd_draft_workflow',
+        label: 'Draft workflow with plain English...',
+        category: 'Workflow',
+        icon: <Sparkles size={14} aria-hidden="true" />,
+        action: () => {
+          setGenerateWorkflowModalOpen(true);
         },
       },
       {
@@ -194,6 +243,15 @@ export const CommandPalette: React.FC = () => {
             return;
           }
           setRunInputModalOpen(true);
+        },
+      },
+      {
+        id: 'cmd_run_test_suite',
+        label: 'Run Testing Lab suite & branch coverage',
+        category: 'Workflow',
+        icon: <FlaskConical size={14} aria-hidden="true" />,
+        action: () => {
+          void runTestSuite();
         },
       },
       {
@@ -252,6 +310,7 @@ export const CommandPalette: React.FC = () => {
   }, [
     addNodeByType,
     addToast,
+    autoArrangeNodes,
     copySelection,
     createBlankWorkflow,
     duplicateNodes,
@@ -260,7 +319,10 @@ export const CommandPalette: React.FC = () => {
     pasteClipboard,
     redo,
     runStaticValidation,
+    runTestSuite,
     saveCurrentWorkflow,
+    saveRevisionCheckpoint,
+    setGenerateWorkflowModalOpen,
     setImportModalOpen,
     setRunInputModalOpen,
     toggleBottomDrawer,

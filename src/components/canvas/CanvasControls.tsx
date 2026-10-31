@@ -1,5 +1,6 @@
 import React from 'react';
 import {
+  LayoutGrid,
   Map as MapIcon,
   Maximize2,
   RotateCcw,
@@ -16,6 +17,7 @@ export interface CanvasControlsProps {
   onFitView: () => void;
   onResetView: () => void;
   onToggleMinimap: () => void;
+  onAutoArrange?: () => void;
 }
 
 export const CanvasControls: React.FC<CanvasControlsProps> = ({
@@ -26,6 +28,7 @@ export const CanvasControls: React.FC<CanvasControlsProps> = ({
   onFitView,
   onResetView,
   onToggleMinimap,
+  onAutoArrange,
 }) => {
   return (
     <div
@@ -85,6 +88,19 @@ export const CanvasControls: React.FC<CanvasControlsProps> = ({
       >
         <RotateCcw size={14} />
       </Button>
+
+      {onAutoArrange && (
+        <Button
+          variant="tertiary"
+          size="sm"
+          iconOnly
+          aria-label="Auto-arrange graph"
+          title="Auto-arrange workflow graph"
+          onClick={onAutoArrange}
+        >
+          <LayoutGrid size={14} />
+        </Button>
+      )}
 
       <Button
         variant={showMinimap ? 'secondary' : 'tertiary'}

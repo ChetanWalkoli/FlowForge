@@ -14,6 +14,7 @@ import '@xyflow/react/dist/style.css';
 import { Play, Plus } from 'lucide-react';
 import { getNodeSpecification } from '../../domain/registry/node-registry';
 import type { NodeType } from '../../domain/types/workflow';
+import { replayRunAtEventIndex } from '../../features/trace-lab/trace-replay';
 import { useWorkspaceStore } from '../../store/workspace-store';
 import { ConnectionEdge, type FlowForgeEdgeData } from '../edges/ConnectionEdge';
 import {
@@ -37,17 +38,30 @@ const InnerWorkflowCanvas: React.FC = () => {
   const selectedEdgeId = useWorkspaceStore((s) => s.selectedEdgeId);
   const validationReport = useWorkspaceStore((s) => s.validationReport);
   const activeRun = useWorkspaceStore((s) => s.activeRun);
+  const selectedTraceEventIndex = useWorkspaceStore(
+    (s) => s.selectedTraceEventIndex,
+  );
 
   const selectNode = useWorkspaceStore((s) => s.selectNode);
   const selectEdge = useWorkspaceStore((s) => s.selectEdge);
   const addNodeByType = useWorkspaceStore((s) => s.addNodeByType);
   const updateNodePosition = useWorkspaceStore((s) => s.updateNodePosition);
   const connectNodes = useWorkspaceStore((s) => s.connectNodes);
+  const autoArrangeNodes = useWorkspaceStore((s) => s.autoArrangeNodes);
   const addToast = useWorkspaceStore((s) => s.addToast);
 
   const reactFlow = useReactFlow();
   const [zoomPercent, setZoomPercent] = useState(100);
   const [showMinimap, setShowMinimap] = useState(true);
+
+  const displayedRun = useMemo(() => {
+    if (!activeRun) return null;
+    return replayRunAtEventIndex(
+      activeRun,
+      selectedTraceEventIndex,
+      workflow.edges,
+    );
+  }, [activeRun, selectedTraceEventIndex, workflow.edges]);
 
   const selectedSet = useMemo(
     () => new Set(selectedNodeIds),
@@ -66,7 +80,7 @@ const InnerWorkflowCanvas: React.FC = () => {
       const outgoingCount = workflow.edges.filter(
         (e) => e.source === node.id,
       ).length;
-      const nodeTrace = activeRun?.nodeTraces[node.id];
+      const nodeTrace = displayedRun?.nodeTraces[node.id];
       const executionStatus = nodeTrace?.status;
       const conditionSelectedBranch: 'true' | 'false' | undefined =
         nodeTrace?.selectedHandleId === 'true' ||
@@ -103,7 +117,7 @@ const InnerWorkflowCanvas: React.FC = () => {
       };
     });
   }, [
-    activeRun,
+    displayedRun,
     selectedSet,
     validationReport.issues,
     workflow.edges,
@@ -111,14 +125,14 @@ const InnerWorkflowCanvas: React.FC = () => {
   ]);
 
   const rfEdges: Edge<FlowForgeEdgeData>[] = useMemo(() => {
-    const traversedSet = new Set(activeRun?.traversedEdgeIds ?? []);
+    const traversedSet = new Set(displayedRun?.traversedEdgeIds ?? []);
     return workflow.edges.map((edge) => {
-      const isTraversed = Boolean(activeRun && traversedSet.has(edge.id));
-      const sourceTrace = activeRun?.nodeTraces[edge.source];
-      const targetTrace = activeRun?.nodeTraces[edge.target];
+      const isTraversed = Boolean(displayedRun && traversedSet.has(edge.id));
+      const sourceTrace = displayedRun?.nodeTraces[edge.source];
+      const targetTrace = displayedRun?.nodeTraces[edge.target];
 
       const isFailed = Boolean(
-        activeRun &&
+        displayedRun &&
           ((isTraversed && targetTrace?.status === 'failed') ||
             sourceTrace?.status === 'failed'),
       );
@@ -138,7 +152,7 @@ const InnerWorkflowCanvas: React.FC = () => {
       );
 
       const isSkipped = Boolean(
-        activeRun &&
+        displayedRun &&
           !isTraversed &&
           !isFailed &&
           (sourceTrace?.status === 'skipped' ||
@@ -159,12 +173,12 @@ const InnerWorkflowCanvas: React.FC = () => {
           isTraversed,
           isSkipped,
           isFailed,
-          hasActiveRun: Boolean(activeRun),
+          hasActiveRun: Boolean(displayedRun),
           label: edge.label,
         },
       };
     });
-  }, [activeRun, selectedEdgeId, workflow.edges]);
+  }, [displayedRun, selectedEdgeId, workflow.edges]);
 
   const handleConnect = useCallback(
     (connection: Connection) => {
@@ -360,6 +374,7 @@ const InnerWorkflowCanvas: React.FC = () => {
               setZoomPercent(100);
             }}
             onToggleMinimap={() => setShowMinimap((prev) => !prev)}
+            onAutoArrange={() => autoArrangeNodes()}
           />
         </div>
       )}

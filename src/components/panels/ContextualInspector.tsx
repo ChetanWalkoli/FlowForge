@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   AlertCircle,
+  BookmarkPlus,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
@@ -13,6 +14,11 @@ import {
   Trash2,
 } from 'lucide-react';
 import { getNodeSpecification } from '../../domain/registry/node-registry';
+import { compareWorkflowRevisions } from '../../domain/versioning/version-diff';
+import {
+  computePayloadDiff,
+  replayRunAtEventIndex,
+} from '../../features/trace-lab/trace-replay';
 import { useWorkspaceStore } from '../../store/workspace-store';
 import { Button, EmptyState, Input, PayloadViewer, StatusBadge } from '../ui';
 import { NodeCategoryIcon } from '../ui/NodeCategoryIcon';
@@ -34,7 +40,11 @@ export const ContextualInspector: React.FC = () => {
   const selectedEdgeId = useWorkspaceStore((s) => s.selectedEdgeId);
   const validationReport = useWorkspaceStore((s) => s.validationReport);
   const activeRun = useWorkspaceStore((s) => s.activeRun);
+  const selectedTraceEventIndex = useWorkspaceStore(
+    (s) => s.selectedTraceEventIndex,
+  );
   const runHistory = useWorkspaceStore((s) => s.runHistory);
+  const revisions = useWorkspaceStore((s) => s.revisions);
 
   const toggleRightInspector = useWorkspaceStore((s) => s.toggleRightInspector);
   const setInspectorMode = useWorkspaceStore((s) => s.setInspectorMode);
@@ -50,7 +60,22 @@ export const ContextualInspector: React.FC = () => {
   const runStaticValidation = useWorkspaceStore((s) => s.runStaticValidation);
   const setActiveRun = useWorkspaceStore((s) => s.setActiveRun);
   const clearActiveRun = useWorkspaceStore((s) => s.clearActiveRun);
+  const saveRevisionCheckpoint = useWorkspaceStore(
+    (s) => s.saveRevisionCheckpoint,
+  );
+  const restoreRevision = useWorkspaceStore((s) => s.restoreRevision);
   const addToast = useWorkspaceStore((s) => s.addToast);
+
+  const [revisionNoteInput, setRevisionNoteInput] = useState('');
+
+  const displayedRun = useMemo(() => {
+    if (!activeRun) return null;
+    return replayRunAtEventIndex(
+      activeRun,
+      selectedTraceEventIndex,
+      workflow.edges,
+    );
+  }, [activeRun, selectedTraceEventIndex, workflow.edges]);
 
   const selectedNode =
     workflow.nodes.find((n) => n.id === selectedNodeId) ?? null;
@@ -63,9 +88,23 @@ export const ContextualInspector: React.FC = () => {
     : [];
 
   const selectedNodeTrace =
-    selectedNode && activeRun
-      ? (activeRun.nodeTraces[selectedNode.id] ?? null)
+    selectedNode && displayedRun
+      ? (displayedRun.nodeTraces[selectedNode.id] ?? null)
       : null;
+
+  const nodePayloadDiff = useMemo(() => {
+    if (
+      !selectedNodeTrace ||
+      selectedNodeTrace.input === undefined ||
+      selectedNodeTrace.output === undefined
+    ) {
+      return null;
+    }
+    return computePayloadDiff(
+      selectedNodeTrace.input,
+      selectedNodeTrace.output,
+    );
+  }, [selectedNodeTrace]);
 
   const runtimeErrorCount = activeRun?.status === 'failed' ? 1 : 0;
   const totalErrorsCount = validationReport.errorsCount + runtimeErrorCount;
@@ -283,6 +322,145 @@ export const ContextualInspector: React.FC = () => {
               >
                 Inspect Validation Report
               </Button>
+            </section>
+
+            <section
+              className="ff-inspector__section"
+              aria-label="Version history and snapshots"
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                }}
+              >
+                <h3 className="ff-inspector__section-title">
+                  Version History (v{workflow.revision})
+                </h3>
+                <StatusBadge
+                  status={
+                    workflow.status === 'published'
+                      ? 'success'
+                      : workflow.status === 'tested'
+                        ? 'running'
+                        : 'pending'
+                  }
+                  label={
+                    (workflow.status ?? 'draft').charAt(0).toUpperCase() +
+                    (workflow.status ?? 'draft').slice(1)
+                  }
+                />
+              </div>
+
+              <div
+                style={{
+                  display: 'flex',
+                  gap: 'var(--space-2)',
+                  alignItems: 'flex-end',
+                }}
+              >
+                <div style={{ flex: 1 }}>
+                  <Input
+                    label="Checkpoint Note"
+                    optional
+                    value={revisionNoteInput}
+                    placeholder="e.g., Added retry & loop guards"
+                    onChange={(e) => setRevisionNoteInput(e.target.value)}
+                  />
+                </div>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  leftIcon={<BookmarkPlus size={13} />}
+                  onClick={() => {
+                    saveRevisionCheckpoint(revisionNoteInput);
+                    setRevisionNoteInput('');
+                  }}
+                >
+                  Save Snapshot
+                </Button>
+              </div>
+
+              {revisions.length > 0 && (
+                <div
+                  className="ff-issue-list"
+                  role="list"
+                  aria-label="Saved workflow revisions"
+                >
+                  {revisions.map((rev) => {
+                    const diffWithCurrent = compareWorkflowRevisions(
+                      rev.snapshot,
+                      workflow,
+                    );
+                    const isCurrent = rev.revisionNumber === workflow.revision;
+                    return (
+                      <div
+                        key={rev.revisionId}
+                        role="listitem"
+                        className="ff-issue-list__item"
+                        style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'stretch',
+                          gap: '4px',
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                          }}
+                        >
+                          <span className="ff-mono" style={{ fontWeight: 600 }}>
+                            v{rev.revisionNumber} · {rev.status}
+                          </span>
+                          {!isCurrent ? (
+                            <Button
+                              variant="tertiary"
+                              size="sm"
+                              aria-label={`Restore v${rev.revisionNumber}`}
+                              onClick={() => restoreRevision(rev.revisionId)}
+                            >
+                              Restore as v{workflow.revision + 1}
+                            </Button>
+                          ) : (
+                            <span
+                              className="ff-mono"
+                              style={{
+                                fontSize: 'var(--text-compact)',
+                                color: 'var(--accent)',
+                              }}
+                            >
+                              Active
+                            </span>
+                          )}
+                        </div>
+                        {rev.note && (
+                          <div
+                            style={{
+                              fontSize: 'var(--text-compact)',
+                              color: 'var(--text-secondary)',
+                            }}
+                          >
+                            {rev.note}
+                          </div>
+                        )}
+                        <div
+                          className="ff-mono"
+                          style={{
+                            fontSize: '11px',
+                            color: 'var(--text-muted)',
+                          }}
+                        >
+                          {diffWithCurrent.summary}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </section>
           </>
         )}
@@ -633,6 +811,73 @@ export const ContextualInspector: React.FC = () => {
                           title="Node Output Payload"
                           payload={selectedNodeTrace.output}
                         />
+                      )}
+
+                      {nodePayloadDiff && (
+                        <div
+                          aria-label="Node payload diff"
+                          style={{
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '4px',
+                            padding: 'var(--space-2)',
+                            borderRadius: 'var(--radius-sm)',
+                            backgroundColor: 'var(--bg-elevated)',
+                            border: '1px solid var(--border-subtle)',
+                            fontSize: 'var(--text-compact)',
+                          }}
+                        >
+                          <div
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              fontWeight: 600,
+                            }}
+                          >
+                            <span>Input → Output Payload Diff</span>
+                            <span className="ff-mono" style={{ color: 'var(--text-muted)' }}>
+                              +{nodePayloadDiff.addedCount} ~{nodePayloadDiff.modifiedCount} -{nodePayloadDiff.removedCount}
+                            </span>
+                          </div>
+                          {nodePayloadDiff.entries.filter((e) => e.changeType !== 'unchanged').length === 0 ? (
+                            <span className="ff-mono" style={{ color: 'var(--text-muted)' }}>
+                              No top-level payload mutations ({nodePayloadDiff.unchangedCount} keys unchanged)
+                            </span>
+                          ) : (
+                            <div
+                              className="ff-mono"
+                              style={{
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: '2px',
+                              }}
+                            >
+                              {nodePayloadDiff.entries
+                                .filter((e) => e.changeType !== 'unchanged')
+                                .map((entry) => (
+                                  <div
+                                    key={entry.key}
+                                    style={{
+                                      color:
+                                        entry.changeType === 'added'
+                                          ? 'var(--success)'
+                                          : entry.changeType === 'removed'
+                                            ? 'var(--danger)'
+                                            : 'var(--warning)',
+                                    }}
+                                  >
+                                    {entry.changeType === 'added' &&
+                                      `+ ${entry.key}: ${JSON.stringify(entry.afterValue)}`}
+                                    {entry.changeType === 'removed' &&
+                                      `- ${entry.key}: ${JSON.stringify(entry.beforeValue)}`}
+                                    {entry.changeType === 'modified' &&
+                                      `~ ${entry.key}: ${JSON.stringify(entry.beforeValue)} → ${JSON.stringify(entry.afterValue)}`}
+                                  </div>
+                                ))}
+                            </div>
+                          )}
+                        </div>
                       )}
                     </div>
                   )}

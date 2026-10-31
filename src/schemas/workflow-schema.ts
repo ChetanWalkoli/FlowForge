@@ -209,6 +209,24 @@ export const MergeNodeConfigSchema = z.object({
   expectedBranches: z.number().int().min(1).max(20),
 });
 
+export const SubflowInputMappingSchema = z.object({
+  targetField: z.string().min(1, 'Target field is required').max(120),
+  source: OperandReferenceSchema,
+});
+
+export const SubflowOutputMappingSchema = z.object({
+  targetField: z.string().min(1, 'Target field is required').max(120),
+  sourcePath: z.string().min(1, 'Source path is required').max(120),
+});
+
+export const SubflowNodeConfigSchema = z.object({
+  label: z.string().min(1, 'Subflow label is required').max(120),
+  targetWorkflowId: z.string().min(1, 'Target workflow ID is required').max(120),
+  targetWorkflowName: z.string().max(120).optional(),
+  inputMapping: z.array(SubflowInputMappingSchema).default([]),
+  outputMapping: z.array(SubflowOutputMappingSchema).optional(),
+});
+
 const NodeBaseFields = {
   id: z.string().min(1, 'Node ID is required').max(128),
   name: z.string().min(1, 'Node name is required').max(120),
@@ -264,6 +282,11 @@ export const WorkflowNodeSchema = z.discriminatedUnion('type', [
     ...NodeBaseFields,
     type: z.literal('merge'),
     config: MergeNodeConfigSchema,
+  }),
+  z.object({
+    ...NodeBaseFields,
+    type: z.literal('subflow'),
+    config: SubflowNodeConfigSchema,
   }),
 ]);
 

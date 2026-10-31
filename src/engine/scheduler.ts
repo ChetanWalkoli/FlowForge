@@ -22,7 +22,10 @@ import {
   executeNodeHandler,
   type NodeHandlerInput,
   type NodeHandlerResult,
+  type SubflowExecutor,
+  type WorkflowLookupFn,
 } from './handlers';
+import type { ExecutionPauseController } from './pause-controller';
 import type { TraceRecorder } from './trace';
 
 export const DEFAULT_MAX_STEPS = 500;
@@ -52,12 +55,16 @@ export type NodeHandlerRunner = (
 
 export interface SchedulerOptions {
   signal?: AbortSignal;
+  pauseController?: ExecutionPauseController;
   maxSteps?: number;
   maxDurationMs?: number;
   handlerTimeoutMs?: number;
   now?: () => number;
   onBeforeNodeStep?: (node: WorkflowNode) => Promise<void> | void;
   nodeRunner?: NodeHandlerRunner;
+  workflowLookup?: WorkflowLookupFn;
+  subflowExecutor?: SubflowExecutor;
+  subflowCallStack?: string[];
 }
 
 type EdgeDisposition = 'pending' | 'activated' | 'skipped';
@@ -441,6 +448,7 @@ export async function runWorkflowSchedule(
   let stepsExecuted = 0;
   let reachedEndNode = false;
   let finalWorkflowOutput: unknown = undefined;
+  let totalPausedDurationMs = 0;
 
   while (executionQueue.length > 0) {
     if (signal?.aborted) {
@@ -448,8 +456,25 @@ export async function runWorkflowSchedule(
       return recorder.getSnapshot();
     }
 
+    // Check pause boundary before next node step (FR-041)
+    if (options.pauseController?.isPaused) {
+      const nextNodeId = executionQueue[0];
+      recorder.recordRunPaused(nextNodeId, now());
+      const pauseStart = now();
+      const aborted = await options.pauseController.waitIfPaused(signal);
+      const pausedMs = Math.max(0, now() - pauseStart);
+      totalPausedDurationMs += pausedMs;
+      if (aborted || signal?.aborted) {
+        recorder.recordRunCancelled(now());
+        return recorder.getSnapshot();
+      }
+      recorder.recordRunResumed(nextNodeId, now());
+    }
+
     const currentTimestamp = now();
-    if (currentTimestamp - runStartTime > maxDurationMs) {
+    const effectiveElapsedMs =
+      currentTimestamp - runStartTime - totalPausedDurationMs;
+    if (effectiveElapsedMs > maxDurationMs) {
       const timeoutError = {
         code: 'ERR_EXECUTION_TIMEOUT',
         message: `Workflow execution exceeded maximum time limit of ${maxDurationMs}ms.`,
@@ -514,6 +539,9 @@ export async function runWorkflowSchedule(
         triggerNodeId: index.triggerNode.id,
         upstreamNodeId,
         now,
+        workflowLookup: options.workflowLookup,
+        subflowExecutor: options.subflowExecutor,
+        subflowCallStack: options.subflowCallStack,
       });
 
       let handlerResult: NodeHandlerResult;

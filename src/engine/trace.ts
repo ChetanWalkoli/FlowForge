@@ -316,6 +316,42 @@ export class TraceRecorder {
   }
 
   /**
+   * Records `run.paused` and transitions the run status to `'paused'`.
+   */
+  public recordRunPaused(
+    pausedAtNodeId?: string,
+    timestamp?: number,
+  ): ExecutionEvent {
+    const ts = timestamp ?? this.now();
+    this.runRecord.status = 'paused';
+
+    return this.emit({
+      type: 'run.paused',
+      runId: this.runRecord.runId,
+      pausedAtNodeId,
+      timestamp: ts,
+    });
+  }
+
+  /**
+   * Records `run.resumed` and transitions the run status to `'running'`.
+   */
+  public recordRunResumed(
+    resumedAtNodeId?: string,
+    timestamp?: number,
+  ): ExecutionEvent {
+    const ts = timestamp ?? this.now();
+    this.runRecord.status = 'running';
+
+    return this.emit({
+      type: 'run.resumed',
+      runId: this.runRecord.runId,
+      resumedAtNodeId,
+      timestamp: ts,
+    });
+  }
+
+  /**
    * Records `run.completed` and finalizes the WorkflowRunRecord with `'success'` status and finalOutput.
    */
   public recordRunCompleted(output: unknown, timestamp?: number): ExecutionEvent {

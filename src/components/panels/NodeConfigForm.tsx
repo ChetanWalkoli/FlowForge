@@ -7,6 +7,7 @@ import type {
   ConditionOperator,
   EndNodeConfig,
   PrimitiveTypeName,
+  SubflowNodeConfig,
   TransformNodeConfig,
   TransformOperationType,
   TriggerNodeConfig,
@@ -17,6 +18,7 @@ import {
   ActionNodeConfigSchema,
   ConditionNodeConfigSchema,
   EndNodeConfigSchema,
+  SubflowNodeConfigSchema,
   TransformNodeConfigSchema,
   TriggerNodeConfigSchema,
 } from '../../schemas/workflow-schema';
@@ -147,6 +149,14 @@ export const NodeConfigForm: React.FC<NodeConfigFormProps> = ({ node }) => {
           newRequiredField={newRequiredField}
           setNewRequiredField={setNewRequiredField}
           onUpdate={(cfg) => updateNodeConfig<'end'>(node.id, cfg)}
+        />
+      )}
+
+      {/* 6. SUBFLOW NODE CONFIG (FR-016) */}
+      {node.type === 'subflow' && (
+        <SubflowFormSection
+          config={node.config}
+          onUpdate={(cfg) => updateNodeConfig<'subflow'>(node.id, cfg)}
         />
       )}
     </div>
@@ -891,6 +901,153 @@ const EndFormSection: React.FC<{
             Add
           </Button>
         </div>
+      </div>
+    </>
+  );
+};
+
+// --- Subflow Subform (FR-016) ---
+const SubflowFormSection: React.FC<{
+  config: SubflowNodeConfig;
+  onUpdate: (cfg: SubflowNodeConfig) => void;
+}> = ({ config, onUpdate }) => {
+  const savedWorkflows = useWorkspaceStore((s) => s.savedWorkflows);
+  const currentWorkflowId = useWorkspaceStore((s) => s.workflow.id);
+  const parsed = SubflowNodeConfigSchema.safeParse(config);
+  const labelIssue = !parsed.success
+    ? parsed.error.issues.find((i) => i.path.includes('label'))?.message
+    : undefined;
+  const targetIssue = !parsed.success
+    ? parsed.error.issues.find((i) => i.path.includes('targetWorkflowId'))?.message
+    : undefined;
+
+  const [newTargetField, setNewTargetField] = useState('');
+  const [newSourcePath, setNewSourcePath] = useState('');
+
+  const eligibleWorkflows = savedWorkflows.filter((w) => w.id !== currentWorkflowId);
+
+  const handleAddInputMapping = () => {
+    if (!newTargetField.trim()) return;
+    const currentMappings = config.inputMapping ?? [];
+    onUpdate({
+      ...config,
+      inputMapping: [
+        ...currentMappings,
+        {
+          targetField: newTargetField.trim(),
+          source: { source: 'upstream', path: newSourcePath.trim() || 'data' },
+        },
+      ],
+    });
+    setNewTargetField('');
+    setNewSourcePath('');
+  };
+
+  const handleRemoveInputMapping = (index: number) => {
+    const currentMappings = config.inputMapping ?? [];
+    onUpdate({
+      ...config,
+      inputMapping: currentMappings.filter((_, idx) => idx !== index),
+    });
+  };
+
+  return (
+    <>
+      <Input
+        label="Subflow Step Label"
+        required
+        value={config.label}
+        error={labelIssue}
+        onChange={(e) => onUpdate({ ...config, label: e.target.value })}
+      />
+
+      <Select
+        label="Target Child Workflow"
+        required
+        value={config.targetWorkflowId}
+        error={targetIssue}
+        options={[
+          { value: '', label: '-- Select a saved workflow --' },
+          ...eligibleWorkflows.map((w) => ({
+            value: w.id,
+            label: `${w.name} (${w.id})`,
+          })),
+        ]}
+        onChange={(e) => {
+          const selectedId = e.target.value;
+          const matched = eligibleWorkflows.find((w) => w.id === selectedId);
+          onUpdate({
+            ...config,
+            targetWorkflowId: selectedId,
+            targetWorkflowName: matched?.name ?? undefined,
+          });
+        }}
+      />
+
+      {config.targetWorkflowId && (
+        <div style={{ fontSize: 'var(--text-compact)', color: 'var(--text-secondary)' }}>
+          Target ID: <code className="ff-mono">{config.targetWorkflowId}</code>
+        </div>
+      )}
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+        <label className="ff-field__label" style={{ fontWeight: 600 }}>
+          Input Field Mappings
+        </label>
+        <div style={{ fontSize: 'var(--text-compact)', color: 'var(--text-muted)' }}>
+          Map upstream parent values to subflow trigger input fields.
+        </div>
+
+        {(config.inputMapping ?? []).map((mapping, idx) => (
+          <div
+            key={idx}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: 'var(--space-1) var(--space-2)',
+              backgroundColor: 'var(--bg-elevated)',
+              borderRadius: 'var(--radius-sm)',
+              border: '1px solid var(--border-subtle)',
+            }}
+          >
+            <span className="ff-mono" style={{ fontSize: 'var(--text-compact)' }}>
+              {mapping.targetField} &larr; upstream.{mapping.source.path ?? '*'}
+            </span>
+            <Button
+              variant="tertiary"
+              size="sm"
+              iconOnly
+              aria-label={`Remove mapping ${mapping.targetField}`}
+              onClick={() => handleRemoveInputMapping(idx)}
+            >
+              <Trash2 size={13} />
+            </Button>
+          </div>
+        ))}
+
+        <div style={{ display: 'flex', gap: 'var(--space-2)', marginTop: 'var(--space-1)' }}>
+          <Input
+            label="Subflow Input Field"
+            placeholder="e.g. amount"
+            value={newTargetField}
+            onChange={(e) => setNewTargetField(e.target.value)}
+          />
+          <Input
+            label="Upstream Path"
+            placeholder="e.g. data.amount"
+            value={newSourcePath}
+            onChange={(e) => setNewSourcePath(e.target.value)}
+          />
+        </div>
+        <Button
+          variant="secondary"
+          size="sm"
+          leftIcon={<Plus size={13} />}
+          onClick={handleAddInputMapping}
+        >
+          Add Input Mapping
+        </Button>
       </div>
     </>
   );

@@ -16,6 +16,7 @@ import type {
 } from '../domain/types/workflow';
 import { validateWorkflow } from '../domain/validation/graph-validator';
 import { createExecutionContext, validateTriggerInput } from './context';
+import type { ExecutionPauseController } from './pause-controller';
 import {
   DEFAULT_HANDLER_TIMEOUT_MS,
   DEFAULT_MAX_DURATION_MS,
@@ -23,18 +24,22 @@ import {
   runWorkflowSchedule,
   type NodeHandlerRunner,
 } from './scheduler';
+import type { WorkflowLookupFn } from './handlers';
 import { TraceRecorder, type ExecutionEventListener } from './trace';
 
 export interface ExecuteWorkflowOptions {
   runId?: string;
   input?: Record<string, unknown>;
   signal?: AbortSignal;
+  pauseController?: ExecutionPauseController;
   maxSteps?: number;
   maxDurationMs?: number;
   handlerTimeoutMs?: number;
   now?: () => number;
   onEvent?: ExecutionEventListener;
   onBeforeNodeStep?: (node: WorkflowNode) => Promise<void> | void;
+  workflowLookup?: WorkflowLookupFn;
+  subflowCallStack?: string[];
   /**
    * Optional handler runner override for testing async handler timeouts or custom execution hooks.
    * Note: In single-threaded JavaScript, a timer/Promise race stops awaiting an asynchronous handler
@@ -150,14 +155,24 @@ export async function executeWorkflow(
   });
 
   // 4. Delegate to the deterministic graph scheduler
+  const callStack = options.subflowCallStack ?? [workflow.id];
   return runWorkflowSchedule(workflow, context, recorder, {
     signal: options.signal,
+    pauseController: options.pauseController,
     maxSteps: options.maxSteps ?? DEFAULT_MAX_STEPS,
     maxDurationMs: options.maxDurationMs ?? DEFAULT_MAX_DURATION_MS,
     handlerTimeoutMs: options.handlerTimeoutMs ?? DEFAULT_HANDLER_TIMEOUT_MS,
     now,
     onBeforeNodeStep: options.onBeforeNodeStep,
     nodeRunner: options.nodeRunner,
+    workflowLookup: options.workflowLookup,
+    subflowCallStack: callStack,
+    subflowExecutor: (childDoc, input, stack) =>
+      executeWorkflow(childDoc, {
+        ...options,
+        input,
+        subflowCallStack: stack,
+      }),
   });
 }
 

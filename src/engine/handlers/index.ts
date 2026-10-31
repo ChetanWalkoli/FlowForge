@@ -9,13 +9,20 @@ import type {
   ConditionEvaluationReason,
   ExecutionContext,
   NodeType,
+  WorkflowDocument,
   WorkflowNode,
   WorkflowNodeBase,
+  WorkflowRunRecord,
 } from '../../domain/types/workflow';
 import {
   ActionNodeConfigSchema,
   ConditionNodeConfigSchema,
+  DelayNodeConfigSchema,
   EndNodeConfigSchema,
+  LoopNodeConfigSchema,
+  MergeNodeConfigSchema,
+  RetryNodeConfigSchema,
+  SubflowNodeConfigSchema,
   TransformNodeConfigSchema,
   TriggerNodeConfigSchema,
 } from '../../schemas/workflow-schema';
@@ -30,12 +37,25 @@ import {
   type SourceResolutionCursor,
 } from '../context';
 
+export type SubflowExecutor = (
+  childWorkflow: WorkflowDocument,
+  input: Record<string, unknown>,
+  subflowCallStack: string[],
+) => Promise<WorkflowRunRecord>;
+
+export type WorkflowLookupFn = (
+  id: string,
+) => Promise<WorkflowDocument | null> | WorkflowDocument | null;
+
 export interface NodeHandlerInput<T extends NodeType = NodeType> {
   node: WorkflowNodeBase<T>;
   context: ExecutionContext;
   triggerNodeId: string;
   upstreamNodeId?: string | null;
   now?: () => number;
+  workflowLookup?: WorkflowLookupFn;
+  subflowExecutor?: SubflowExecutor;
+  subflowCallStack?: string[];
 }
 
 export interface NodeHandlerResult {
@@ -834,11 +854,403 @@ export function executeEndNode(
 }
 
 /**
+ * 6. Delay Node Handler (FR-016)
+ * Validates bounded wait duration and passes through upstream data with timing metadata.
+ */
+export function executeDelayNode(
+  params: NodeHandlerInput<'delay'>,
+): NodeHandlerResult {
+  const { node, context, triggerNodeId, upstreamNodeId } = params;
+
+  const configCheck = DelayNodeConfigSchema.safeParse(node.config);
+  if (!configCheck.success) {
+    throw new EngineExecutionError({
+      code: 'ERR_INVALID_NODE_CONFIG',
+      message: `Invalid Delay node configuration on "${node.name}": ${configCheck.error.issues[0]?.message ?? 'schema error'}.`,
+      nodeId: node.id,
+      remediation: 'Configure a valid bounded durationMs (0..60000) in the Node Inspector.',
+    });
+  }
+
+  const cursor: SourceResolutionCursor = {
+    triggerNodeId,
+    currentNodeId: node.id,
+    upstreamNodeId,
+  };
+
+  const upstreamPayload = resolveSourcePayload(context, 'upstream', cursor);
+  const baseObject =
+    typeof upstreamPayload === 'object' &&
+    upstreamPayload !== null &&
+    !Array.isArray(upstreamPayload)
+      ? structuredClone(upstreamPayload as Record<string, unknown>)
+      : { value: structuredClone(upstreamPayload) };
+
+  return {
+    output: {
+      ...baseObject,
+      delayedMs: node.config.durationMs,
+    },
+    nextHandleIds: ['next'],
+  };
+}
+
+/**
+ * 7. Retry Policy Node Handler (FR-016, FR-033)
+ * Executes bounded retry policy with attempt tracking and backoff metadata.
+ */
+export function executeRetryNode(
+  params: NodeHandlerInput<'retry'>,
+): NodeHandlerResult {
+  const { node, context, triggerNodeId, upstreamNodeId } = params;
+
+  const configCheck = RetryNodeConfigSchema.safeParse(node.config);
+  if (!configCheck.success) {
+    throw new EngineExecutionError({
+      code: 'ERR_INVALID_NODE_CONFIG',
+      message: `Invalid Retry node configuration on "${node.name}": ${configCheck.error.issues[0]?.message ?? 'schema error'}.`,
+      nodeId: node.id,
+      remediation: 'Configure maxAttempts (1..10) and backoffMs in the Node Inspector.',
+    });
+  }
+
+  const { maxAttempts, backoffMs, simulateFailuresBeforeSuccess = 0 } =
+    node.config;
+
+  if (simulateFailuresBeforeSuccess >= maxAttempts) {
+    throw new EngineExecutionError({
+      code: 'ERR_RETRY_EXHAUSTED',
+      message: `Retry node "${node.name}" exhausted all ${maxAttempts} attempt(s) after ${simulateFailuresBeforeSuccess} simulated failure(s).`,
+      nodeId: node.id,
+      details: { maxAttempts, backoffMs, simulateFailuresBeforeSuccess },
+      remediation: 'Increase maxAttempts or resolve the underlying transient failure.',
+    });
+  }
+
+  const cursor: SourceResolutionCursor = {
+    triggerNodeId,
+    currentNodeId: node.id,
+    upstreamNodeId,
+  };
+
+  const upstreamPayload = resolveSourcePayload(context, 'upstream', cursor);
+  const baseObject =
+    typeof upstreamPayload === 'object' &&
+    upstreamPayload !== null &&
+    !Array.isArray(upstreamPayload)
+      ? structuredClone(upstreamPayload as Record<string, unknown>)
+      : { value: structuredClone(upstreamPayload) };
+
+  return {
+    output: {
+      ...baseObject,
+      retryAttemptsUsed: simulateFailuresBeforeSuccess + 1,
+      maxAttempts,
+      backoffMs,
+    },
+    nextHandleIds: ['next'],
+  };
+}
+
+/**
+ * 8. Bounded Loop Node Handler (FR-016, FR-023, FR-034)
+ * Iterates over a resolved array with a strict `maxIterations` safety cap.
+ */
+export function executeLoopNode(
+  params: NodeHandlerInput<'loop'>,
+): NodeHandlerResult {
+  const { node, context, triggerNodeId, upstreamNodeId } = params;
+
+  const configCheck = LoopNodeConfigSchema.safeParse(node.config);
+  if (!configCheck.success) {
+    throw new EngineExecutionError({
+      code: 'ERR_INVALID_NODE_CONFIG',
+      message: `Invalid Loop node configuration on "${node.name}": ${configCheck.error.issues[0]?.message ?? 'schema error'}.`,
+      nodeId: node.id,
+      remediation: 'Configure arraySource, maxIterations, and itemVariable in the Node Inspector.',
+    });
+  }
+
+  const cursor: SourceResolutionCursor = {
+    triggerNodeId,
+    currentNodeId: node.id,
+    upstreamNodeId,
+  };
+
+  const { arraySource, maxIterations, itemVariable } = node.config;
+  const resolvedArray = resolveOperandReference(context, arraySource, cursor);
+
+  if (!Array.isArray(resolvedArray)) {
+    throw new EngineExecutionError({
+      code: 'ERR_INVALID_LOOP_SOURCE',
+      message: `Loop node "${node.name}" expected an array at "${arraySource.source}.${arraySource.path}", but received ${describeValueType(resolvedArray)}.`,
+      nodeId: node.id,
+      details: { arraySource, actualType: describeValueType(resolvedArray) },
+      remediation: 'Point arraySource to a valid array field on the trigger or upstream payload.',
+    });
+  }
+
+  if (resolvedArray.length > maxIterations) {
+    throw new EngineExecutionError({
+      code: 'ERR_LOOP_LIMIT_EXCEEDED',
+      message: `Loop node "${node.name}" input array length (${resolvedArray.length}) exceeds configured maxIterations (${maxIterations}).`,
+      nodeId: node.id,
+      details: { arrayLength: resolvedArray.length, maxIterations },
+      remediation: `Reduce input array size or increase maxIterations above ${resolvedArray.length}.`,
+    });
+  }
+
+  const processedItems: unknown[] = [];
+  for (let i = 0; i < resolvedArray.length; i++) {
+    const clonedItem = structuredClone(resolvedArray[i]);
+    context.variables[itemVariable] = clonedItem;
+    processedItems.push(clonedItem);
+  }
+
+  return {
+    output: {
+      items: processedItems,
+      iterations: processedItems.length,
+      maxIterations,
+      itemVariable,
+    },
+    nextHandleIds: ['next'],
+  };
+}
+
+/**
+ * 9. Merge / Synchronize Node Handler (FR-016, FR-023, FR-035)
+ * Deterministically merges executed upstream branch outputs according to configured strategy.
+ */
+export function executeMergeNode(
+  params: NodeHandlerInput<'merge'>,
+): NodeHandlerResult {
+  const { node, context, triggerNodeId, upstreamNodeId } = params;
+
+  const configCheck = MergeNodeConfigSchema.safeParse(node.config);
+  if (!configCheck.success) {
+    throw new EngineExecutionError({
+      code: 'ERR_INVALID_NODE_CONFIG',
+      message: `Invalid Merge node configuration on "${node.name}": ${configCheck.error.issues[0]?.message ?? 'schema error'}.`,
+      nodeId: node.id,
+      remediation: 'Configure a valid merge strategy and expectedBranches count.',
+    });
+  }
+
+  const cursor: SourceResolutionCursor = {
+    triggerNodeId,
+    currentNodeId: node.id,
+    upstreamNodeId,
+  };
+
+  const upstreamPayload = resolveSourcePayload(context, 'upstream', cursor);
+  const { strategy, expectedBranches } = node.config;
+
+  const branchOutputs = Object.entries(context.nodeOutputs)
+    .filter(([id]) => id !== triggerNodeId && id !== node.id)
+    .map(([, val]) => structuredClone(val));
+
+  if (strategy === 'collectArray') {
+    return {
+      output: {
+        strategy,
+        expectedBranches,
+        mergedItems:
+          branchOutputs.length > 0
+            ? branchOutputs
+            : [structuredClone(upstreamPayload)],
+      },
+      nextHandleIds: ['next'],
+    };
+  }
+
+  if (strategy === 'firstCompleted') {
+    return {
+      output: structuredClone(upstreamPayload),
+      nextHandleIds: ['next'],
+    };
+  }
+
+  // combineObjects (default)
+  const combined: Record<string, unknown> = {};
+  for (const out of branchOutputs) {
+    if (typeof out === 'object' && out !== null && !Array.isArray(out)) {
+      Object.assign(combined, structuredClone(out));
+    }
+  }
+  if (
+    typeof upstreamPayload === 'object' &&
+    upstreamPayload !== null &&
+    !Array.isArray(upstreamPayload)
+  ) {
+    Object.assign(combined, structuredClone(upstreamPayload));
+  }
+
+  return {
+    output: combined,
+    nextHandleIds: ['next'],
+  };
+}
+
+/**
+ * Executes a Subflow node by invoking a child workflow by ID with mapped inputs and outputs (FR-016).
+ * Detects recursive loops and returns a complete nested execution trace.
+ */
+export async function executeSubflowNode(
+  params: NodeHandlerInput<'subflow'>,
+): Promise<NodeHandlerResult> {
+  const { node, context, triggerNodeId, upstreamNodeId } = params;
+
+  const parsedConfig = SubflowNodeConfigSchema.safeParse(node.config);
+  if (!parsedConfig.success) {
+    throw new EngineExecutionError({
+      code: 'ERR_INVALID_NODE_CONFIG',
+      message: `Subflow "${node.name}" (${node.id}) has invalid configuration: ${parsedConfig.error.issues[0]?.message ?? 'Schema error'}`,
+      nodeId: node.id,
+      remediation: 'Verify subflow node configuration in the inspector.',
+    });
+  }
+
+  const config = parsedConfig.data;
+  if (!config.targetWorkflowId || config.targetWorkflowId.trim() === '') {
+    throw new EngineExecutionError({
+      code: 'ERR_SUBFLOW_NOT_CONFIGURED',
+      message: `Subflow node "${node.name}" (${node.id}) has no target workflow configured.`,
+      nodeId: node.id,
+      remediation: 'Select a target workflow in the Node Inspector.',
+    });
+  }
+
+  const currentStack = params.subflowCallStack ?? [];
+  if (currentStack.includes(config.targetWorkflowId)) {
+    throw new EngineExecutionError({
+      code: 'ERR_SUBFLOW_RECURSION_DETECTED',
+      message: `Recursion cycle detected: subflow "${config.targetWorkflowId}" is already active in invocation chain [${[...currentStack, config.targetWorkflowId].join(' -> ')}].`,
+      nodeId: node.id,
+      details: {
+        callStack: currentStack,
+        targetWorkflowId: config.targetWorkflowId,
+      },
+      remediation:
+        'Break the recursive invocation cycle by removing the circular subflow reference.',
+    });
+  }
+
+  if (!params.workflowLookup) {
+    throw new EngineExecutionError({
+      code: 'ERR_SUBFLOW_NO_LOOKUP',
+      message: `Cannot execute Subflow node "${node.name}": no workflow lookup provider was configured.`,
+      nodeId: node.id,
+      remediation:
+        'Ensure workflow lookup is provided to the execution options.',
+    });
+  }
+
+  const childDoc = await params.workflowLookup(config.targetWorkflowId);
+  if (!childDoc) {
+    throw new EngineExecutionError({
+      code: 'ERR_SUBFLOW_NOT_FOUND',
+      message: `Subflow workflow with ID "${config.targetWorkflowId}" was not found in storage.`,
+      nodeId: node.id,
+      details: { targetWorkflowId: config.targetWorkflowId },
+      remediation:
+        'Verify that the referenced subflow workflow exists and is saved.',
+    });
+  }
+
+  // Map inputs from parent execution context to child workflow trigger input
+  const childInput: Record<string, unknown> = {};
+  const cursor: SourceResolutionCursor = {
+    triggerNodeId,
+    currentNodeId: node.id,
+    upstreamNodeId,
+  };
+
+  if (config.inputMapping && config.inputMapping.length > 0) {
+    for (const mapping of config.inputMapping) {
+      const resolved = resolveOperandReference(
+        context,
+        mapping.source,
+        cursor,
+      );
+      childInput[mapping.targetField] = structuredClone(resolved);
+    }
+  } else {
+    const upstream = resolveSourcePayload(context, 'upstream', cursor);
+    if (
+      typeof upstream === 'object' &&
+      upstream !== null &&
+      !Array.isArray(upstream)
+    ) {
+      Object.assign(childInput, structuredClone(upstream));
+    }
+  }
+
+  if (!params.subflowExecutor) {
+    throw new EngineExecutionError({
+      code: 'ERR_SUBFLOW_NO_RUNNER',
+      message: 'Subflow executor is not configured.',
+      nodeId: node.id,
+      remediation: 'Provide a subflow executor to the runtime scheduler.',
+    });
+  }
+
+  const subflowRunRecord = await params.subflowExecutor(
+    childDoc,
+    childInput,
+    [...currentStack, childDoc.id],
+  );
+
+  if (subflowRunRecord.status === 'failed') {
+    throw new EngineExecutionError({
+      code: subflowRunRecord.error?.code ?? 'ERR_SUBFLOW_FAILED',
+      message: `Subflow "${childDoc.name}" (${childDoc.id}) failed: ${subflowRunRecord.error?.message ?? 'Execution error'}`,
+      nodeId: node.id,
+      details: {
+        subflowRunId: subflowRunRecord.runId,
+        subflowError: subflowRunRecord.error,
+      },
+      remediation:
+        subflowRunRecord.error?.remediation ??
+        'Inspect the subflow execution trace or fix the child workflow logic.',
+    });
+  }
+
+  if (subflowRunRecord.status === 'cancelled') {
+    throw new EngineExecutionError({
+      code: 'ERR_SUBFLOW_CANCELLED',
+      message: `Subflow "${childDoc.name}" (${childDoc.id}) was cancelled.`,
+      nodeId: node.id,
+      remediation: 'Re-run the workflow without cancelling.',
+    });
+  }
+
+  // Map outputs
+  let finalOutput: unknown = subflowRunRecord.finalOutput;
+  if (config.outputMapping && config.outputMapping.length > 0) {
+    const mapped: Record<string, unknown> = {};
+    for (const outMap of config.outputMapping) {
+      mapped[outMap.targetField] = resolveDotPath(
+        subflowRunRecord.finalOutput,
+        outMap.sourcePath,
+        { nodeId: node.id, sourceLabel: 'subflow.finalOutput' },
+      );
+    }
+    finalOutput = mapped;
+  }
+
+  return {
+    output: structuredClone(finalOutput),
+    nextHandleIds: ['next'],
+  };
+}
+
+/**
  * Dispatches execution to the registered pure handler for `node.type`.
  */
 export function executeNodeHandler(
   params: NodeHandlerInput<NodeType>,
-): NodeHandlerResult {
+): NodeHandlerResult | Promise<NodeHandlerResult> {
   const { node } = params;
 
   switch (node.type) {
@@ -867,14 +1279,55 @@ export function executeNodeHandler(
         ...params,
         node: node as WorkflowNodeBase<'end'>,
       });
+    case 'delay':
+    case 'retry':
+    case 'loop':
+    case 'merge': {
+      const cfg = node.config as unknown as Record<string, unknown> | undefined;
+      if (!cfg || Object.keys(cfg).length === 0) {
+        throw new EngineExecutionError({
+          code: 'ERR_UNSUPPORTED_NODE_HANDLER',
+          message: `Node "${node.name}" uses control-flow type "${node.type}" without a configured handler payload.`,
+          nodeId: node.id,
+          remediation:
+            'Configure the control-flow node parameters in the Node Inspector before executing.',
+        });
+      }
+      if (node.type === 'delay') {
+        return executeDelayNode({
+          ...params,
+          node: node as WorkflowNodeBase<'delay'>,
+        });
+      }
+      if (node.type === 'retry') {
+        return executeRetryNode({
+          ...params,
+          node: node as WorkflowNodeBase<'retry'>,
+        });
+      }
+      if (node.type === 'loop') {
+        return executeLoopNode({
+          ...params,
+          node: node as WorkflowNodeBase<'loop'>,
+        });
+      }
+      return executeMergeNode({
+        ...params,
+        node: node as WorkflowNodeBase<'merge'>,
+      });
+    }
+    case 'subflow':
+      return executeSubflowNode({
+        ...params,
+        node: node as WorkflowNodeBase<'subflow'>,
+      });
     default: {
       const unsupportedNode = node as WorkflowNode;
       throw new EngineExecutionError({
         code: 'ERR_UNSUPPORTED_NODE_HANDLER',
-        message: `Node "${unsupportedNode.name}" uses control-flow type "${unsupportedNode.type}" which is not enabled in MVP runtime handlers.`,
+        message: `Node "${unsupportedNode.name}" uses unsupported type "${String(unsupportedNode.type)}".`,
         nodeId: unsupportedNode.id,
-        remediation:
-          'Use Trigger, Condition, Action, Transform, and End nodes for MVP workflows.',
+        remediation: 'Use a registered FlowForge node type.',
       });
     }
   }

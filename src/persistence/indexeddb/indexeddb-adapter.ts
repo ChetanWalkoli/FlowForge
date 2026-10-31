@@ -8,6 +8,13 @@ import type {
   WorkflowDocument,
   WorkflowRunRecord,
 } from '../../domain/types/workflow';
+import type { WorkflowRevisionRecord } from '../../domain/versioning/version-diff';
+import {
+  parsePersistedRevision,
+  parsePersistedTestSuite,
+  WorkflowRevisionRecordSchema,
+  type PersistedTestSuiteRecord,
+} from '../../schemas/persistence-schema';
 import { WorkflowDocumentSchema } from '../../schemas/workflow-schema';
 import type {
   PersistenceAdapter,
@@ -15,7 +22,7 @@ import type {
 } from '../adapters/persistence-adapter';
 
 export const FLOWFORGE_DB_NAME = 'flowforge_studio_db';
-export const FLOWFORGE_DB_VERSION = 1;
+export const FLOWFORGE_DB_VERSION = 2;
 
 interface FlowForgeDBSchema extends DBSchema {
   workflows: {
@@ -31,6 +38,15 @@ interface FlowForgeDBSchema extends DBSchema {
     key: string;
     value: WorkflowRunRecord;
     indexes: { 'by-workflow': string };
+  };
+  revisions: {
+    key: string;
+    value: WorkflowRevisionRecord;
+    indexes: { 'by-workflow': string };
+  };
+  testSuites: {
+    key: string;
+    value: PersistedTestSuiteRecord;
   };
   meta: {
     key: string;
@@ -62,6 +78,15 @@ export class LocalIndexedDBAdapter implements PersistenceAdapter {
                 keyPath: 'runId',
               });
               runStore.createIndex('by-workflow', 'workflowId');
+            }
+            if (!db.objectStoreNames.contains('revisions')) {
+              const revStore = db.createObjectStore('revisions', {
+                keyPath: 'revisionId',
+              });
+              revStore.createIndex('by-workflow', 'workflowId');
+            }
+            if (!db.objectStoreNames.contains('testSuites')) {
+              db.createObjectStore('testSuites', { keyPath: 'workflowId' });
             }
             if (!db.objectStoreNames.contains('meta')) {
               db.createObjectStore('meta', { keyPath: 'key' });
@@ -188,6 +213,48 @@ export class LocalIndexedDBAdapter implements PersistenceAdapter {
     await db.put('runs', structuredClone(run));
   }
 
+  async listRevisions(workflowId: string): Promise<WorkflowRevisionRecord[]> {
+    if (!workflowId || typeof workflowId !== 'string') return [];
+    const db = await this.getDb();
+    const all = await db.getAllFromIndex('revisions', 'by-workflow', workflowId);
+    const validRevisions: WorkflowRevisionRecord[] = [];
+    for (const item of all) {
+      const parsed = parsePersistedRevision(item);
+      if (parsed) {
+        validRevisions.push(parsed);
+      }
+    }
+    // Return newest revisions first (matches UI expectations)
+    return validRevisions.sort((a, b) => b.revisionNumber - a.revisionNumber);
+  }
+
+  async saveRevision(record: WorkflowRevisionRecord): Promise<void> {
+    const parsed = WorkflowRevisionRecordSchema.safeParse(record);
+    if (!parsed.success) {
+      throw new Error(
+        `Cannot persist invalid workflow revision record: ${parsed.error.issues[0]?.message ?? 'Schema violation'}`,
+      );
+    }
+    const db = await this.getDb();
+    await db.put('revisions', structuredClone(record));
+  }
+
+  async getTestSuite(workflowId: string): Promise<PersistedTestSuiteRecord | null> {
+    if (!workflowId || typeof workflowId !== 'string') return null;
+    const db = await this.getDb();
+    const raw = await db.get('testSuites', workflowId);
+    if (!raw) return null;
+    return parsePersistedTestSuite(raw);
+  }
+
+  async saveTestSuite(record: PersistedTestSuiteRecord): Promise<void> {
+    if (!record || typeof record.workflowId !== 'string' || record.workflowId.trim().length === 0) {
+      throw new Error('Cannot persist test suite record: missing or empty workflowId.');
+    }
+    const db = await this.getDb();
+    await db.put('testSuites', structuredClone(record));
+  }
+
   async getWorkspaceMeta(): Promise<WorkspaceMetadataRecord> {
     const db = await this.getDb();
     const existing = await db.get('meta', 'workspace_meta');
@@ -219,13 +286,15 @@ export class LocalIndexedDBAdapter implements PersistenceAdapter {
   async clearAll(): Promise<void> {
     const db = await this.getDb();
     const tx = db.transaction(
-      ['workflows', 'templates', 'runs', 'meta'],
+      ['workflows', 'templates', 'runs', 'revisions', 'testSuites', 'meta'],
       'readwrite',
     );
     await Promise.all([
       tx.objectStore('workflows').clear(),
       tx.objectStore('templates').clear(),
       tx.objectStore('runs').clear(),
+      tx.objectStore('revisions').clear(),
+      tx.objectStore('testSuites').clear(),
       tx.objectStore('meta').clear(),
       tx.done,
     ]);

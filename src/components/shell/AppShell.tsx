@@ -5,6 +5,7 @@ import { ContextualInspector } from '../panels/ContextualInspector';
 import { Button, ToastRegion } from '../ui';
 import { BottomDrawer } from './BottomDrawer';
 import { CommandPalette } from './CommandPalette';
+import { GenerateWorkflowModal } from './GenerateWorkflowModal';
 import { ImportWorkflowModal } from './ImportWorkflowModal';
 import { NavigationSidebar } from './NavigationSidebar';
 import { OnboardingBanner } from './OnboardingBanner';
@@ -190,6 +191,7 @@ export const AppShell: React.FC = () => {
       <CommandPalette />
       <ImportWorkflowModal />
       <RunWorkflowModal />
+      <GenerateWorkflowModal />
       <ToastRegion toasts={toasts} onDismiss={dismissToast} />
     </div>
   );

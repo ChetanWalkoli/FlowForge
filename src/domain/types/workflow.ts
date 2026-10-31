@@ -43,7 +43,8 @@ export type NodeType =
   | 'delay'
   | 'retry'
   | 'loop'
-  | 'merge';
+  | 'merge'
+  | 'subflow';
 
 export type WorkflowLifecycleStatus =
   | 'draft'
@@ -169,6 +170,14 @@ export interface MergeNodeConfig {
   expectedBranches: number;
 }
 
+export interface SubflowNodeConfig {
+  label: string;
+  targetWorkflowId: string;
+  targetWorkflowName?: string;
+  inputMapping?: Array<{ targetField: string; source: OperandReference }>;
+  outputMapping?: Array<{ targetField: string; sourcePath: string }>;
+}
+
 export type NodeConfigMap = {
   trigger: TriggerNodeConfig;
   condition: ConditionNodeConfig;
@@ -179,6 +188,7 @@ export type NodeConfigMap = {
   retry: RetryNodeConfig;
   loop: LoopNodeConfig;
   merge: MergeNodeConfig;
+  subflow: SubflowNodeConfig;
 };
 
 export type AnyNodeConfig = NodeConfigMap[NodeType];
@@ -201,7 +211,8 @@ export type WorkflowNode =
   | WorkflowNodeBase<'delay'>
   | WorkflowNodeBase<'retry'>
   | WorkflowNodeBase<'loop'>
-  | WorkflowNodeBase<'merge'>;
+  | WorkflowNodeBase<'merge'>
+  | WorkflowNodeBase<'subflow'>;
 
 export interface WorkflowEdge {
   id: string;
@@ -313,6 +324,8 @@ export type ExecutionEvent =
       timestamp: number;
     }
   | { type: 'node.skipped'; nodeId: string; nodeName: string; reason: string; timestamp: number }
+  | { type: 'run.paused'; runId: string; pausedAtNodeId?: string; timestamp: number }
+  | { type: 'run.resumed'; runId: string; resumedAtNodeId?: string; timestamp: number }
   | { type: 'run.completed'; runId: string; output: unknown; durationMs: number; timestamp: number }
   | { type: 'run.failed'; runId: string; error: StructuredExecutionError; durationMs: number; timestamp: number }
   | { type: 'run.cancelled'; runId: string; durationMs: number; timestamp: number };

@@ -279,6 +279,28 @@ export const NODE_REGISTRY: { [K in NodeType]: NodeTypeSpecification<K> } = {
     }),
     isMvp: false,
   },
+  subflow: {
+    type: 'subflow',
+    label: 'Subflow',
+    category: 'flow',
+    subtitle: 'Invoke sub-workflow',
+    description:
+      'Executes a child workflow by ID with mapped input and output fields.',
+    iconName: 'Workflow',
+    inputs: [
+      { id: 'in', label: 'In', direction: 'input', dataType: 'any', required: true },
+    ],
+    outputs: [
+      { id: 'next', label: 'Out', direction: 'output', dataType: 'object', required: true },
+    ],
+    createDefaultConfig: () => ({
+      label: 'Invoke subflow',
+      targetWorkflowId: '',
+      inputMapping: [],
+      outputMapping: [],
+    }),
+    isMvp: false,
+  },
 };
 
 export function getNodeSpecification<T extends NodeType>(

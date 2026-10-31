@@ -4,6 +4,8 @@
  */
 
 import type { WorkflowDocument, WorkflowRunRecord } from '../../domain/types/workflow';
+import type { WorkflowRevisionRecord } from '../../domain/versioning/version-diff';
+import type { PersistedTestSuiteRecord } from '../../schemas/persistence-schema';
 
 export interface WorkspaceMetadataRecord {
   key: 'workspace_meta';
@@ -28,6 +30,14 @@ export interface PersistenceAdapter {
   listRuns(workflowId?: string): Promise<WorkflowRunRecord[]>;
   saveRun(run: WorkflowRunRecord): Promise<void>;
 
+  // Immutable workflow revisions (FR-056..FR-058)
+  listRevisions(workflowId: string): Promise<WorkflowRevisionRecord[]>;
+  saveRevision(record: WorkflowRevisionRecord): Promise<void>;
+
+  // Testing Lab suites: test cases + latest suite report per workflow (FR-046..FR-051)
+  getTestSuite(workflowId: string): Promise<PersistedTestSuiteRecord | null>;
+  saveTestSuite(record: PersistedTestSuiteRecord): Promise<void>;
+
   // Workspace session & onboarding metadata (FR-053, FR-061)
   getWorkspaceMeta(): Promise<WorkspaceMetadataRecord>;
   saveWorkspaceMeta(
@@ -37,4 +47,3 @@ export interface PersistenceAdapter {
   // Utility for tests / reset
   clearAll(): Promise<void>;
 }
-

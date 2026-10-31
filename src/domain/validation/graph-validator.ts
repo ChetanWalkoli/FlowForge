@@ -317,6 +317,26 @@ export function validateWorkflow(
         });
       }
     }
+
+    if (node.type === 'subflow') {
+      if (!node.config.targetWorkflowId || node.config.targetWorkflowId.trim() === '') {
+        pushIssue({
+          code: 'SUBFLOW_TARGET_MISSING',
+          severity: 'warning',
+          message: `Subflow "${node.name}" has no target workflow selected.`,
+          remediation: 'Select a target workflow in the contextual inspector.',
+          nodeId: node.id,
+        });
+      } else if (node.config.targetWorkflowId === workflow.id) {
+        pushIssue({
+          code: 'SUBFLOW_CIRCULAR_REFERENCE',
+          severity: 'error',
+          message: `Subflow "${node.name}" references its parent workflow (direct recursive loop).`,
+          remediation: 'Select a different child workflow to prevent infinite recursion.',
+          nodeId: node.id,
+        });
+      }
+    }
   }
 
   // 7. Reachability from Trigger

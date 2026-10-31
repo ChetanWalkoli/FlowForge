@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { AppShell } from '../components/shell/AppShell';
 import { EXPENSE_APPROVAL_WORKFLOW } from '../domain/fixtures/expense-approval';
@@ -9,6 +9,7 @@ describe('Phase 3 — Workflow Canvas, Custom Nodes, Configuration Forms, and Ed
   beforeEach(() => {
     useWorkspaceStore.getState().loadWorkflow(EXPENSE_APPROVAL_WORKFLOW);
     useWorkspaceStore.setState({
+      isHydrated: true,
       leftSidebarCollapsed: false,
       leftSidebarTab: 'nodes',
       nodeSearchQuery: '',
@@ -85,7 +86,6 @@ describe('Phase 3 — Workflow Canvas, Custom Nodes, Configuration Forms, and Ed
   });
 
   it('creates all 5 MVP node types (Trigger, Condition, Action, Transform, End) with unique IDs', async () => {
-    const user = userEvent.setup();
     useWorkspaceStore.getState().createBlankWorkflow();
     render(<AppShell />);
 
@@ -97,8 +97,11 @@ describe('Phase 3 — Workflow Canvas, Custom Nodes, Configuration Forms, and Ed
       'Add End node',
     ];
 
-    for (const label of mvpButtons) {
-      await user.click(screen.getByRole('button', { name: label }));
+    for (const [index, label] of mvpButtons.entries()) {
+      fireEvent.click(screen.getByRole('button', { name: label }));
+      await waitFor(() => {
+        expect(useWorkspaceStore.getState().workflow.nodes).toHaveLength(index + 1);
+      });
     }
 
     const nodes = useWorkspaceStore.getState().workflow.nodes;
@@ -151,13 +154,15 @@ describe('Phase 3 — Workflow Canvas, Custom Nodes, Configuration Forms, and Ed
       within(inspector).getByRole('button', { name: 'Connect' }),
     );
 
-    expect(
-      useWorkspaceStore
-        .getState()
-        .workflow.edges.some(
-          (e) => e.source === transformNode.id && e.target === 'end_1',
-        ),
-    ).toBe(true);
+    await waitFor(() => {
+      expect(
+        useWorkspaceStore
+          .getState()
+          .workflow.edges.some(
+            (e) => e.source === transformNode.id && e.target === 'end_1',
+          ),
+      ).toBe(true);
+    });
 
     // Disconnect the newly created edge from the inspector
     const disconnectBtn = within(inspector).getByRole('button', {
@@ -165,13 +170,15 @@ describe('Phase 3 — Workflow Canvas, Custom Nodes, Configuration Forms, and Ed
     });
     await user.click(disconnectBtn);
 
-    expect(
-      useWorkspaceStore
-        .getState()
-        .workflow.edges.some(
-          (e) => e.source === transformNode.id && e.target === 'end_1',
-        ),
-    ).toBe(false);
+    await waitFor(() => {
+      expect(
+        useWorkspaceStore
+          .getState()
+          .workflow.edges.some(
+            (e) => e.source === transformNode.id && e.target === 'end_1',
+          ),
+      ).toBe(false);
+    });
   });
 
   it('renders contextual configuration forms for Trigger, Condition, Action, Transform, and End nodes and validates inputs', async () => {
